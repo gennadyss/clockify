@@ -1,0 +1,15 @@
+# Copy this file to .env and fill in your actual values
+
+# Clockify Configuration
+CLOCKIFY_API_KEY=your_clockify_api_key
+CLOCKIFY_WORKSPACE_ID=your_workspace_id
+
+# Application Configuration
+APPROVE_CHANGES=false
+DEBUG=true
+
+# Usage Instructions:
+# 1. Copy this file to .env
+# 2. Replace all placeholder values with your actual Clockify credentials
+# 3. Set APPROVE_CHANGES=true only when you want to actually apply changes
+# 4. Keep DEBUG=true for development, set to false for production 
