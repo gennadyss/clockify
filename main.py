@@ -23,12 +23,13 @@ from Clients.ClientManager import ClientManager
 from Utils.logging import Logger
 
 
-def main(client_id: str = None):
+def main(client_id: str = None, role: str = "Admin"):
     """
     Main execution function
     
     Args:
         client_id: Client ID to filter projects by (if None, uses all projects)
+        role: User role to include in authorized users (default: "Admin")
     """
     print("🕐 Starting Clockify Access Management")
     print("=" * 50)
@@ -38,9 +39,12 @@ def main(client_id: str = None):
     else:
         print("Processing all projects (no client filter)")
     
+    if role:
+        print(f"Including users with role: {role}")
+    
     # Create and run the access manager
     access_manager = TasksAccessManager()
-    success = access_manager.run_access_restrictions(client_id)
+    success = access_manager.run_access_restrictions(client_id, role)
     
     if success:
         print("\n🕐 Clockify Access Management completed successfully")
@@ -89,10 +93,12 @@ if __name__ == "__main__":
                        help='Run demonstration of new modules')
     parser.add_argument('--client-id', type=str, 
                        help='Client ID to filter projects by (if not specified, uses all projects)')
+    parser.add_argument('--role', type=str, default='Admin',
+                       help='User role to include in authorized users (default: Admin)')
     
     args = parser.parse_args()
     
     if args.demo:
         demonstrate_new_modules()
     else:
-        main(args.client_id) 
+        main(args.client_id, args.role) 
