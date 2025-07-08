@@ -1,0 +1,8 @@
+change logic for Step2. find a list of groups in clockify, remove from that list groups form restricted_groups.  
+update tasks groups userGroupIds with final list of groups by  @https://docs.clockify.me/#tag/Task/operation/updateTask  with required Parameters and Request Body schema
+list of task restricted_tasks
+
+change logic for Step1.   
+update authorized_tasks userGroupIds with authorized_groups and assigneeIds with authorized_users by  @https://docs.clockify.me/#tag/Task/operation/updateTask  with required Parameters and Request Body
+list of tasks - authorized_tasks. for compare of name in authorized_tasks use naming pattern not strong compare by name.
+example: Contingencies, Contingencies (30%) and other variant of the same task

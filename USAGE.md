@@ -59,9 +59,12 @@ Clockify/
 ├── Tasks/                    # Task operations
 │   ├── __init__.py
 │   └── Tasks.py             # Task management
-├── Users/                    # User & group management
+├── Users/                    # User management
 │   ├── __init__.py
 │   └── Users.py             # User operations
+├── Groups/                   # Group management
+│   ├── __init__.py
+│   └── Groups.py            # Group operations
 ├── SomeClockifyApiTag/      # Template for new endpoints
 │   ├── __init__.py
 │   └── CodeName.py          # Template file
@@ -151,6 +154,181 @@ summary = client_manager.get_clients_summary()
 client_structure = client_manager.discover_client_structure()
 print(f"Found {client_structure['discovery_metadata']['total_clients']} clients")
 ```
+
+### **Groups Module (Groups/Groups.py)**
+
+The Groups module provides comprehensive management of Clockify user groups through a dedicated `GroupManager` class. This module was extracted from `Users.py` to separate concerns and provide better organization of group-related functionality.
+
+#### **API Endpoint Validation**
+
+Based on the official Clockify API documentation, the following endpoints are used:
+
+**User Groups Endpoints**
+- **GET** `/workspaces/{workspaceId}/user-groups` - Get all user groups
+- **POST** `/workspaces/{workspaceId}/user-groups` - Create a new user group
+- **GET** `/workspaces/{workspaceId}/user-groups/{groupId}` - Get specific group
+- **PUT** `/workspaces/{workspaceId}/user-groups/{groupId}` - Update group
+- **DELETE** `/workspaces/{workspaceId}/user-groups/{groupId}` - Delete group
+- **GET** `/workspaces/{workspaceId}/user-groups/{groupId}/users` - Get group members
+- **POST** `/workspaces/{workspaceId}/user-groups/{groupId}/users` - Add users to group
+- **DELETE** `/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}` - Remove user from group
+
+**User-Specific Endpoints**
+- **GET** `/workspaces/{workspaceId}/users/{userId}/groups` - Get groups for a user
+
+✅ **All endpoints validated against [Clockify API Documentation](https://docs.clockify.me/#tag/Group)**
+
+#### **Features**
+
+**Core Group Management**
+- **Get all groups** with pagination support
+- **Find groups by name** (exact and partial matching)
+- **Create, update, and delete** user groups
+- **Manage group membership** (add/remove users)
+- **Bulk operations** for adding multiple users
+- **Export functionality** to CSV and JSON formats
+
+**Enhanced Functionality**
+- **Detailed group summaries** with member counts
+- **Group search and filtering** capabilities
+- **Comprehensive error handling** and logging
+- **Integration with centralized utilities** (logging, export, API client)
+
+#### **Class Structure**
+
+```python
+class GroupManager:
+    def __init__(self, logger: Optional[Logger] = None)
+    
+    # Core group operations
+    def get_all_groups(self) -> Dict
+    def get_group_by_id(self, group_id: str) -> Dict
+    def get_group_by_name(self, group_name: str) -> Optional[Dict]
+    def create_user_group(self, group_data: Dict) -> Dict
+    def update_user_group(self, group_id: str, group_data: Dict) -> Dict
+    def delete_user_group(self, group_id: str) -> Dict
+    
+    # Group membership management
+    def get_group_members(self, group_id: str) -> Dict
+    def add_user_to_group(self, group_id: str, user_id: str) -> Dict
+    def remove_user_from_group(self, group_id: str, user_id: str) -> Dict
+    def bulk_add_users_to_group(self, group_id: str, user_ids: List[str]) -> Dict
+    
+    # User-group relationships
+    def get_user_groups(self, user_id: str) -> Dict
+    
+    # Search and filtering
+    def find_groups_by_names(self, group_names: List[str]) -> Dict
+    def get_groups_by_names(self, group_names: List[str]) -> Dict
+    
+    # Enhanced functionality
+    def get_group_members_with_details(self, group_id: str) -> Dict
+    def get_groups_summary(self) -> Dict
+    
+    # Export functionality
+    def export_groups_to_csv(self, groups: Dict, filename: str) -> None
+    def export_groups_to_json(self, groups: Dict, filename: str) -> None
+```
+
+#### **Usage Examples**
+
+**Basic Group Operations**
+
+```python
+from Groups.Groups import GroupManager
+
+# Initialize the manager
+group_manager = GroupManager()
+
+# Get all groups
+all_groups = group_manager.get_all_groups()
+print(f"Found {all_groups.get('total_count', 0)} groups")
+
+# Find a specific group
+group = group_manager.get_group_by_name("Development Team")
+if group:
+    print(f"Group ID: {group.get('id')}")
+
+# Get group members
+members = group_manager.get_group_members(group_id)
+print(f"Group has {len(members.get('items', []))} members")
+```
+
+**Advanced Operations**
+
+```python
+# Get detailed group summary
+summary = group_manager.get_groups_summary()
+for group_info in summary.get('groups', []):
+    print(f"Group: {group_info['name']} - Members: {group_info['member_count']}")
+
+# Bulk add users to group
+user_ids = ["user1", "user2", "user3"]
+result = group_manager.bulk_add_users_to_group(group_id, user_ids)
+
+# Find multiple groups
+group_names = ["Admin", "Developers", "Managers"]
+found_groups = group_manager.get_groups_by_names(group_names)
+print(f"Found {found_groups.get('total_count', 0)} out of {len(group_names)} groups")
+```
+
+**Export Operations**
+
+```python
+# Export all groups to CSV and JSON
+all_groups = group_manager.get_all_groups()
+group_manager.export_groups_to_csv(all_groups, "all_groups")
+group_manager.export_groups_to_json(all_groups, "all_groups")
+```
+
+#### **Integration with TasksAccessManager**
+
+The Groups module is fully integrated with `TasksAccessManager` for enhanced access management:
+
+```python
+from TasksAccessRestriction.TasksAccessManager import TasksAccessManager
+
+# Initialize with GroupManager support
+access_manager = TasksAccessManager()
+
+# Get authorized groups details
+authorized_groups = access_manager.get_authorized_groups_details()
+
+# Get restricted groups details  
+restricted_groups = access_manager.get_restricted_groups_details()
+
+# Get comprehensive groups access summary
+groups_summary = access_manager.get_groups_access_summary()
+
+# Validate user access based on group membership
+user_access = access_manager.validate_user_group_access(user_id)
+print(f"User access status: {user_access.get('access_status')}")
+```
+
+#### **Migration from Users.py**
+
+**Removed from UserManager:**
+- `get_all_groups()`
+- `get_group_by_id()`
+- `get_group_by_name()`
+- `get_group_members()`
+- `create_user_group()`
+- `update_user_group()`
+- `delete_user_group()`
+- `add_user_to_group()`
+- `remove_user_from_group()`
+- `find_groups_by_names()`
+- `export_groups_to_csv()`
+- `export_groups_to_json()`
+
+**Kept in UserManager:**
+- `get_user_groups()` - Gets groups for a specific user (user-centric operation)
+
+This separation ensures:
+- **Single Responsibility Principle**: Each manager handles its specific domain
+- **Better Code Organization**: Group operations are centralized
+- **Improved Maintainability**: Easier to update group-specific functionality
+- **Enhanced Testability**: Individual testing of group operations
 
 ## 🛠️ Using the Utils Modules
 
