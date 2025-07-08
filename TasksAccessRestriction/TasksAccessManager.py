@@ -65,7 +65,7 @@ class TasksAccessManager:
             "PM Dry Operations"
         ]
         
-        # Authorized users and groups
+        # Authorized users
         self.authorized_users = [
             "Ekaterina Postovalova",
             "Lev Bedniagin", 
@@ -96,9 +96,6 @@ class TasksAccessManager:
             "US.LAB.CLIN",
             "US.QAREG",
             "US.HR",
-            "Eric White",
-            "Artur Baisangurov",
-            "Tina Barsoumian",
             "US.LAB.RND.NGS",
             "US.LAB.RND.ISP",
             "US.LAB.RND.PATH",
@@ -106,7 +103,14 @@ class TasksAccessManager:
             "US.LAB.CLIN.PATH",
             "US.LAB.RND.OP.BSP"
         ]
-        
+
+         # Restricted users
+        self.restricted_users = [
+            "Eric White",
+            "Artur Baisangurov",
+            "Tina Barsoumian"
+        ]
+
         # Initialize data storage for united files
         self.authorized_tasks_data = {}
         self.restricted_tasks_data = {}
@@ -163,6 +167,120 @@ class TasksAccessManager:
         self.logger.log_step(f"Getting Projects by Client API: {client_id} - Using ProjectManager", "COMPLETE")
         return filtered_projects
     
+    def filter_projects_by_project_id(self, all_projects: Dict, project_id: str) -> Dict:
+        """
+        Filter projects to include only the specified project ID
+        
+        Args:
+            all_projects: Dictionary containing all projects data
+            project_id: Specific project ID to filter by
+            
+        Returns:
+            dict: Filtered projects containing only the specified project
+        """
+        filtered_projects = {"items": []}
+        
+        for project in all_projects.get('items', []):
+            if project.get('id') == project_id:
+                filtered_projects['items'].append(project)
+                break
+        
+        return filtered_projects
+    
+    def identify_projects_for_step_one(self) -> Dict:
+        """
+        Identify projects that contain tasks matching authorized task patterns
+        
+        Returns:
+            dict: Projects containing authorized tasks with metadata
+        """
+        self.logger.info("🔍 Identifying projects for Step 1 (authorized tasks)...")
+        
+        all_projects, _ = self.get_all_projects_and_clients()
+        relevant_projects = {"items": []}
+        
+        for project in all_projects.get('items', []):
+            project_id = project.get('id')
+            project_name = project.get('name', '')
+            
+            # Get tasks for this project
+            project_tasks = self.task_manager.get_tasks_by_project(project_id)
+            authorized_tasks_in_project = []
+            
+            # Check if any tasks match authorized patterns
+            for authorized_task_pattern in self.authorized_tasks:
+                for task in project_tasks.get('items', []):
+                    task_name = task.get('name', '')
+                    
+                    # Pattern matching: check if authorized_task_pattern is in task_name
+                    if authorized_task_pattern.lower() in task_name.lower():
+                        authorized_tasks_in_project.append({
+                            'task_id': task.get('id'),
+                            'task_name': task_name,
+                            'matched_pattern': authorized_task_pattern
+                        })
+            
+            # If project has authorized tasks, include it
+            if authorized_tasks_in_project:
+                project_copy = project.copy()
+                project_copy['authorized_tasks_count'] = len(authorized_tasks_in_project)
+                project_copy['authorized_tasks'] = authorized_tasks_in_project
+                relevant_projects['items'].append(project_copy)
+        
+        self.logger.info(f"Found {len(relevant_projects['items'])} projects containing authorized tasks")
+        
+        # Export the analysis
+        self.export_data_to_files(relevant_projects, "step1_relevant_projects_analysis")
+        
+        return relevant_projects
+    
+    def identify_projects_for_step_two(self) -> Dict:
+        """
+        Identify projects that contain tasks matching restricted task names
+        
+        Returns:
+            dict: Projects containing restricted tasks with metadata
+        """
+        self.logger.info("🔍 Identifying projects for Step 2 (restricted tasks)...")
+        
+        all_projects, _ = self.get_all_projects_and_clients()
+        relevant_projects = {"items": []}
+        
+        for project in all_projects.get('items', []):
+            project_id = project.get('id')
+            project_name = project.get('name', '')
+            
+            # Get tasks for this project
+            project_tasks = self.task_manager.get_tasks_by_project(project_id)
+            restricted_tasks_in_project = []
+            
+            # Check if any tasks match restricted task names
+            for restricted_task_name in self.restricted_tasks:
+                for task in project_tasks.get('items', []):
+                    task_name = task.get('name', '')
+                    
+                    # Name matching: check if restricted_task_name is in task_name
+                    if restricted_task_name.lower() in task_name.lower():
+                        restricted_tasks_in_project.append({
+                            'task_id': task.get('id'),
+                            'task_name': task_name,
+                            'matched_restricted_name': restricted_task_name
+                        })
+            
+            # If project has restricted tasks, include it
+            if restricted_tasks_in_project:
+                project_copy = project.copy()
+                project_copy['restricted_tasks_count'] = len(restricted_tasks_in_project)
+                project_copy['restricted_tasks'] = restricted_tasks_in_project
+                relevant_projects['items'].append(project_copy)
+        
+        self.logger.info(f"Found {len(relevant_projects['items'])} projects containing restricted tasks")
+        
+        # Export the analysis
+        self.export_data_to_files(relevant_projects, "step2_relevant_projects_analysis")
+        
+        return relevant_projects
+
     def authorized_users_by_role(self, role: str = "Admin") -> List[str]:
         """
         Get authorized users by role using Clockify User API
@@ -224,26 +342,30 @@ class TasksAccessManager:
             self.logger.log_step(f"Getting Authorized Users by Role: {role} - Using UserManager", "ERROR")
             return []
     
-    def step_one_grant_access(self, client_id: str = None, role: str = "Admin") -> bool:
+    def step_one_grant_access(self, project_id: str = None, role: str = "Admin") -> bool:
         """
         Step 1: Grant access to authorized tasks by updating userGroupIds and assigneeIds
         New logic: Pattern matching for authorized_tasks, update with authorized_groups and authorized_users
         
         Args:
-            client_id: Client ID to filter projects by (if None, uses all projects)
+            project_id: Specific project ID to process (if None, uses all projects with authorized tasks)
             role: User role to include in authorized users (default: "Admin")
         """
         self.logger.log_step("STEP 1: Granting Access to Authorized Tasks", "START")
         
-        # Get all projects and filter by client ID if specified
+        # Get all projects and filter by project ID if specified
         all_projects, all_clients = self.get_all_projects_and_clients()
         
-        if client_id:
-            filtered_projects = self.filter_projects_by_client_id(all_projects, client_id)
-            self.logger.info(f"Processing {len(filtered_projects.get('items', []))} projects for client ID {client_id}")
+        if project_id:
+            filtered_projects = self.filter_projects_by_project_id(all_projects, project_id)
+            self.logger.info(f"Processing specific project ID: {project_id}")
+            if not filtered_projects.get('items'):
+                self.logger.warning(f"⚠️  Project ID {project_id} not found!")
+                return False
         else:
-            filtered_projects = all_projects
-            self.logger.info(f"Processing {len(filtered_projects.get('items', []))} projects")
+            # Use intermediate method to identify relevant projects
+            filtered_projects = self.identify_projects_for_step_one()
+            self.logger.info(f"Processing {len(filtered_projects.get('items', []))} projects containing authorized tasks")
         
         self.export_data_to_files(filtered_projects, "filtered_projects_step1")
         
@@ -364,7 +486,9 @@ class TasksAccessManager:
                 
                 if project_id and task_id:
                     # Prepare update data - update both userGroupIds and assigneeIds
+                    # Note: Clockify updateTask API requires 'name' field to be included
                     update_data = {
+                        "name": task.get('name', ''),  # Required field
                         "userGroupIds": authorized_group_ids,
                         "assigneeIds": authorized_user_ids
                     }
@@ -399,25 +523,29 @@ class TasksAccessManager:
         self.logger.log_step("STEP 1: Granting Access to Authorized Tasks", "COMPLETE")
         return True
     
-    def step_two_remove_access(self, client_id: str = None) -> bool:
+    def step_two_remove_access(self, project_id: str = None) -> bool:
         """
         Step 2: Remove access to specific tasks from restricted groups
         New logic: Get all groups, remove restricted groups, update task userGroupIds
         
         Args:
-            client_id: Client ID to filter projects by (if None, uses all projects)
+            project_id: Specific project ID to process (if None, uses all projects with restricted tasks)
         """
         self.logger.log_step("STEP 2: Removing Access from Restricted Tasks", "START")
         
-        # Get all projects and filter by client ID if specified
+        # Get all projects and filter by project ID if specified
         all_projects, _ = self.get_all_projects_and_clients()
         
-        if client_id:
-            filtered_projects = self.filter_projects_by_client_id(all_projects, client_id)
-            self.logger.info(f"Processing {len(filtered_projects.get('items', []))} projects for client ID {client_id}")
+        if project_id:
+            filtered_projects = self.filter_projects_by_project_id(all_projects, project_id)
+            self.logger.info(f"Processing specific project ID: {project_id}")
+            if not filtered_projects.get('items'):
+                self.logger.warning(f"⚠️  Project ID {project_id} not found!")
+                return False
         else:
-            filtered_projects = all_projects
-            self.logger.info(f"Processing {len(filtered_projects.get('items', []))} projects")
+            # Use intermediate method to identify relevant projects
+            filtered_projects = self.identify_projects_for_step_two()
+            self.logger.info(f"Processing {len(filtered_projects.get('items', []))} projects containing restricted tasks")
         
         # Step 1: Get all groups from Clockify
         self.logger.info("Getting all groups from Clockify...")
@@ -515,7 +643,9 @@ class TasksAccessManager:
                 
                 if project_id and task_id:
                     # Prepare update data - only update userGroupIds field
+                    # Note: Clockify updateTask API requires 'name' field to be included
                     update_data = {
+                        "name": task.get('name', ''),  # Required field
                         "userGroupIds": allowed_group_ids
                     }
                     
@@ -546,13 +676,13 @@ class TasksAccessManager:
         self.logger.log_step("STEP 2: Removing Access from Restricted Tasks", "COMPLETE")
         return True
     
-    def create_united_task_files(self, client_id: str = None) -> bool:
+    def create_united_task_files(self, project_id: str = None) -> bool:
         """
         Create united files that merge authorized and restricted tasks data
         This provides a comprehensive view of all task access management
         
         Args:
-            client_id: Client ID used for filtering (for filename context)
+            project_id: Project ID used for filtering (for filename context)
         """
         self.logger.log_step("Creating United Task Files", "START")
         
@@ -587,7 +717,7 @@ class TasksAccessManager:
                     "total_tasks": len(united_tasks_summary['items']),
                     "authorized_tasks": self.authorized_tasks_count,
                     "restricted_tasks": self.restricted_tasks_count,
-                    "client_id_filter": client_id if client_id else "all_projects",
+                    "project_id_filter": project_id if project_id else "all_projects",
                     "projects_with_authorized_tasks": len(self.authorized_tasks_data),
                     "restricted_task_types": len(self.restricted_tasks_data)
                 },
@@ -596,7 +726,7 @@ class TasksAccessManager:
             }
             
             # Generate filename suffix
-            filename_suffix = f"client_{client_id}" if client_id else "all_projects"
+            filename_suffix = f"project_{project_id}" if project_id else "all_projects"
             
             # Export united files
             self.export_data_to_files(united_tasks_summary, f"united_all_tasks_{filename_suffix}")
@@ -837,21 +967,21 @@ class TasksAccessManager:
             self.logger.error(f"Error validating user group access: {e}")
             return {"user_id": user_id, "error": str(e), "access_status": "ERROR"}
     
-    def run_access_restrictions(self, client_id: str = None, role: str = "Admin") -> bool:
+    def run_access_restrictions(self, project_id: str = None, role: str = "Admin") -> bool:
         """
         Execute both access restriction steps
         
         Args:
-            client_id: Client ID to filter projects by (if None, uses all projects)
+            project_id: Specific project ID to process (if None, uses all relevant projects)
             role: User role to include in authorized users (default: "Admin")
         """
         self.logger.info("🕐 Starting Clockify Access Management")
         self.logger.info("=" * 50)
         
-        if client_id:
-            self.logger.info(f"Filtering projects by client ID: {client_id}")
+        if project_id:
+            self.logger.info(f"Processing specific project ID: {project_id}")
         else:
-            self.logger.info("Processing all projects (no client filter)")
+            self.logger.info("Processing all relevant projects (using project identification methods)")
         
         # Comprehensive validation using AuthManager
         if not self.validate_configuration():
@@ -870,15 +1000,15 @@ class TasksAccessManager:
         
         try:
             # Execute Step 1
-            success_step1 = self.step_one_grant_access(client_id, role)
+            success_step1 = self.step_one_grant_access(project_id, role)
             
             # Execute Step 2
-            success_step2 = self.step_two_remove_access(client_id)
+            success_step2 = self.step_two_remove_access(project_id)
             
             # Create united files if both steps completed
             success_united = False
             if success_step1 and success_step2:
-                success_united = self.create_united_task_files(client_id)
+                success_united = self.create_united_task_files(project_id)
                 self.logger.info("✅ Both steps completed successfully!")
                 if success_united:
                     self.logger.info("✅ United task files created successfully!")
