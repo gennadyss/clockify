@@ -101,6 +101,15 @@ class GroupManager:
         endpoint = f"/user-groups/{group_id}/users"
         result = self.api_client.get_workspace_data(endpoint)
         
+        # Handle 405 Method Not Allowed gracefully
+        if self.api_client.is_error_response(result):
+            error_message = self.api_client.get_error_message(result)
+            if "405" in str(error_message) or "Method Not Allowed" in str(error_message):
+                self.logger.warning(f"Group members endpoint not supported for group {group_id} (405 Method Not Allowed)")
+                return {"items": [], "error": "endpoint_not_supported", "group_id": group_id}
+            else:
+                self.logger.error(f"Error getting group members for {group_id}: {error_message}")
+        
         return result
     
     def create_user_group(self, group_data: Dict) -> Dict:
@@ -359,15 +368,24 @@ class GroupManager:
         # Get group details
         group_details = self.get_group_by_id(group_id)
         
+        # Handle case where group members endpoint is not supported
+        member_count = 0
+        if members.get('error') == 'endpoint_not_supported':
+            self.logger.warning(f"Cannot get member details for group {group_id} - endpoint not supported")
+            members = {"items": [], "error": "endpoint_not_supported"}
+        else:
+            member_count = len(members.get('items', [])) if isinstance(members.get('items'), list) else 0
+        
         # Combine data
         result = {
             "group_id": group_id,
             "group_name": group_details.get('name', 'Unknown'),
             "members": members,
-            "member_count": len(members.get('items', [])) if isinstance(members.get('items'), list) else 0
+            "member_count": member_count,
+            "members_supported": members.get('error') != 'endpoint_not_supported'
         }
         
-        self.logger.info(f"Retrieved detailed members for group {group_id}: {result['member_count']} members")
+        self.logger.info(f"Retrieved detailed members for group {group_id}: {result['member_count']} members (supported: {result['members_supported']})")
         return result
     
     def bulk_add_users_to_group(self, group_id: str, user_ids: List[str]) -> Dict:
@@ -404,7 +422,8 @@ class GroupManager:
         all_groups = self.get_all_groups()
         summary = {
             "total_groups": all_groups.get('total_count', 0),
-            "groups": []
+            "groups": [],
+            "member_counts_supported": True
         }
         
         for group in all_groups.get('items', []):
@@ -413,13 +432,25 @@ class GroupManager:
             
             # Get member count for each group
             members = self.get_group_members(group_id)
-            member_count = len(members.get('items', [])) if isinstance(members.get('items'), list) else 0
+            
+            # Handle case where group members endpoint is not supported
+            if members.get('error') == 'endpoint_not_supported':
+                member_count = 0
+                member_count_supported = False
+                summary['member_counts_supported'] = False
+            else:
+                member_count = len(members.get('items', [])) if isinstance(members.get('items'), list) else 0
+                member_count_supported = True
             
             summary['groups'].append({
                 "id": group_id,
                 "name": group_name,
-                "member_count": member_count
+                "member_count": member_count,
+                "member_count_supported": member_count_supported
             })
+        
+        if not summary['member_counts_supported']:
+            self.logger.warning("Some group member counts could not be retrieved due to API limitations")
         
         self.logger.info(f"Generated summary for {summary['total_groups']} groups")
         return summary 

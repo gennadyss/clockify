@@ -48,6 +48,9 @@ class TasksAccessManager:
         self.project_manager = ProjectManager(self.logger)
         self.client_manager = ClientManager(self.logger)
         
+        # Client filtering support
+        self.client_filter_id = None
+        
         # Define the authorized tasks within EXT.FFS projects from README
         self.authorized_tasks = [
             "NGS Reagents and Lab Operations Cost",
@@ -62,7 +65,9 @@ class TasksAccessManager:
             "NGS Dry Operations",
             "ISP Dry Operations", 
             "IMG Dry Operations",
-            "PM Dry Operations"
+            "PM Dry Operations",
+            "RepGen Dry operations",
+            "Pipeline Dry Operations"
         ]
         
         # Authorized users
@@ -129,14 +134,27 @@ class TasksAccessManager:
         """
         Step 0: Get ALL projects and extract all unique clients (categories)
         As required by README.md - find all projects first, then extract clients
+        Supports client filtering when client_filter_id is set
         """
         self.logger.log_step("Getting All Projects and Clients - Using ProjectManager", "START")
         
-        # Get all projects using the dedicated ProjectManager
-        all_projects = self.project_manager.get_all_projects()
-        
-        # Extract clients from projects
-        clients = self.project_manager.extract_clients_from_projects(all_projects)
+        # Check if client filtering is enabled
+        if self.client_filter_id:
+            self.logger.info(f"Filtering projects by client ID: {self.client_filter_id}")
+            # Use ProjectManager to get projects filtered by client
+            all_projects = self.project_manager.get_projects_by_client_api(self.client_filter_id)
+            
+            # Get client information for the filtered client
+            clients = {"items": []}
+            client_data = self.client_manager.get_client_by_id(self.client_filter_id)
+            if client_data and not self.client_manager.api_client.is_error_response(client_data):
+                clients["items"].append(client_data)
+        else:
+            # Get all projects using the dedicated ProjectManager
+            all_projects = self.project_manager.get_all_projects()
+            
+            # Extract clients from projects
+            clients = self.project_manager.extract_clients_from_projects(all_projects)
         
         self.logger.log_step("Getting All Projects and Clients - Using ProjectManager", "COMPLETE")
         return all_projects, clients
