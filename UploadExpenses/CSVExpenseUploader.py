@@ -3,14 +3,17 @@ CSVExpenseUploader - CSV-based expense upload for Clockify
 
 This module provides comprehensive CSV upload functionality for expenses including:
 - CSV file parsing and validation
-- Data mapping and transformation
+- Data mapping and transformation with name-to-ID resolution
+- Project name to ID resolution
+- Task name to ID resolution  
+- Category name to ID resolution
 - Schema validation and error handling
 - Bulk upload with progress tracking
 - Detailed reporting and export capabilities
 
 Supported CSV Format:
-Required columns: amount, description
-Optional columns: date, project_id, project_name, category, billable, tags, currency, receipt
+Required columns: amount, description OR amount, project (name), task (name), category (name)
+Optional columns: date, project_id, project_name, category, billable, tags, currency, receipt, task_id
 
 Author: Auto-generated for Clockify Expense CSV Upload
 """
@@ -32,6 +35,7 @@ from Utils.export_data import DataExporter
 from Utils.file_utils import FileUtils
 from Expenses.ExpenseManager import ExpenseManager
 from Projects.ProjectManager import ProjectManager
+from Tasks.Tasks import TaskManager
 
 
 class CSVExpenseUploader:
@@ -40,18 +44,23 @@ class CSVExpenseUploader:
     
     Provides comprehensive CSV upload functionality including:
     - File parsing and validation
-    - Data transformation and mapping
+    - Data transformation and mapping with name-to-ID resolution
+    - Project, Task, and Category name resolution
     - Bulk upload with error handling
     - Progress tracking and reporting
     """
     
     # CSV column mappings
-    REQUIRED_COLUMNS = ['amount', 'description']
+    REQUIRED_COLUMNS = ['amount']  # Either description OR project+task+category
+    ALTERNATIVE_REQUIRED = [
+        ['description'], 
+        ['project', 'task', 'category']  # For the new format
+    ]
     OPTIONAL_COLUMNS = [
         'date', 'project_id', 'project_name', 'category', 
-        'billable', 'tags', 'currency', 'receipt', 'task_id'
+        'billable', 'tags', 'currency', 'receipt', 'task_id', 'description',
+        'user_email'  # User email field
     ]
-    ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
     
     # Data type mappings
     BOOLEAN_COLUMNS = ['billable']
@@ -69,18 +78,27 @@ class CSVExpenseUploader:
         self.api_client = APIClient(logger=self.logger)
         self.expense_manager = ExpenseManager(logger=self.logger)
         self.project_manager = ProjectManager(logger=self.logger)
+        self.task_manager = TaskManager(logger=self.logger)
         self.data_exporter = DataExporter(logger=self.logger)
         self.file_utils = FileUtils(logger=self.logger)
         
         # Upload tracking
         self._upload_stats = {}
+        
+        # Caching for name-to-ID resolution
         self._project_cache = {}
+        self._task_cache = {}
+        self._category_cache = {}
+        self._project_name_to_id = {}
+        self._task_name_to_id = {}
+        self._category_name_to_id = {}
         
         self.logger.info("CSVExpenseUploader initialized successfully")
 
     def upload_from_csv(self, csv_file_path: str, workspace_id: str, 
                        dry_run: bool = False, chunk_size: int = 50,
-                       column_mapping: Dict[str, str] = None) -> Dict[str, Any]:
+                       column_mapping: Dict[str, str] = None,
+                       default_user_email: str = None) -> Dict[str, Any]:
         """
         Upload expenses from a CSV file
         
@@ -90,6 +108,7 @@ class CSVExpenseUploader:
             dry_run: If True, validate only without uploading
             chunk_size: Number of expenses to upload in each batch
             column_mapping: Custom column name mappings
+            default_user_email: Default user email to assign to expenses if not specified in CSV
             
         Returns:
             Dict containing upload results and statistics
@@ -102,7 +121,10 @@ class CSVExpenseUploader:
             if not self.file_utils.file_exists(csv_file_path):
                 raise FileNotFoundError(f"CSV file not found: {csv_file_path}")
             
-            # Step 2: Parse CSV file
+            # Step 2: Pre-load caches for name resolution
+            self._load_name_resolution_caches(workspace_id)
+            
+            # Step 3: Parse CSV file
             parsed_data = self._parse_csv_file(csv_file_path, column_mapping)
             if not parsed_data['success']:
                 return parsed_data
@@ -110,8 +132,8 @@ class CSVExpenseUploader:
             raw_expenses = parsed_data['data']
             self.logger.info(f"Parsed {len(raw_expenses)} expense records from CSV")
             
-            # Step 3: Validate and transform data
-            validation_result = self._validate_and_transform_data(raw_expenses, workspace_id)
+            # Step 4: Validate and transform data
+            validation_result = self._validate_and_transform_data(raw_expenses, workspace_id, default_user_email)
             if not validation_result['success']:
                 return validation_result
             
@@ -120,7 +142,7 @@ class CSVExpenseUploader:
             
             self.logger.info(f"Validation completed: {len(valid_expenses)} valid, {len(validation_errors)} errors")
             
-            # Step 4: If dry run, return validation results
+            # Step 5: If dry run, return validation results
             if dry_run:
                 return {
                     'success': True,
@@ -134,12 +156,12 @@ class CSVExpenseUploader:
                     'processed_at': datetime.now(timezone.utc).isoformat()
                 }
             
-            # Step 5: Upload expenses in chunks
+            # Step 6: Upload expenses in chunks
             upload_result = self._upload_expenses_in_chunks(
                 workspace_id, valid_expenses, chunk_size
             )
             
-            # Step 6: Generate comprehensive results
+            # Step 7: Generate comprehensive results
             final_result = {
                 'success': upload_result['success'],
                 'workspace_id': workspace_id,
@@ -152,7 +174,7 @@ class CSVExpenseUploader:
                 'processed_at': datetime.now(timezone.utc).isoformat()
             }
             
-            # Step 7: Export results
+            # Step 8: Export results
             self._export_upload_results(final_result)
             
             self.logger.info(f"CSV upload completed: {upload_result.get('total_created', 0)} expenses created")
@@ -167,6 +189,106 @@ class CSVExpenseUploader:
                 'csv_file_path': csv_file_path,
                 'processed_at': datetime.now(timezone.utc).isoformat()
             }
+
+    def _load_name_resolution_caches(self, workspace_id: str) -> None:
+        """
+        Pre-load caches for name-to-ID resolution
+        
+        Args:
+            workspace_id: Clockify workspace ID
+        """
+        try:
+            self.logger.info("Loading name resolution caches...")
+            
+            # Load projects cache
+            self.logger.info("Loading projects cache...")
+            projects_result = self.project_manager.get_all_projects()
+            if projects_result.get('items'):
+                projects = projects_result.get('items', [])
+                self._project_cache[workspace_id] = {
+                    proj['id']: proj for proj in projects
+                }
+                self._project_name_to_id[workspace_id] = {
+                    proj['name'].lower().strip(): proj['id'] for proj in projects
+                }
+                self.logger.info(f"Cached {len(projects)} projects")
+            else:
+                self.logger.warning("Could not load projects for caching")
+                self._project_cache[workspace_id] = {}
+                self._project_name_to_id[workspace_id] = {}
+            
+            # Load tasks cache - get all tasks from all projects
+            self.logger.info("Loading tasks cache...")
+            all_tasks = {}
+            task_name_to_data = {}
+            
+            for project in self._project_cache.get(workspace_id, {}).values():
+                project_id = project['id']
+                project_name = project['name']
+                
+                try:
+                    tasks_result = self.task_manager.get_tasks_by_project(project_id)
+                    project_tasks = tasks_result.get('items', [])
+                    
+                    for task in project_tasks:
+                        task_id = task.get('id')
+                        task_name = task.get('name', '').lower().strip()
+                        
+                        # Store task data with project context
+                        task_data = {
+                            'id': task_id,
+                            'name': task.get('name', ''),
+                            'project_id': project_id,
+                            'project_name': project_name
+                        }
+                        
+                        all_tasks[task_id] = task_data
+                        
+                        # Create mapping for name resolution
+                        # Use project_name + task_name as key for uniqueness
+                        composite_key = f"{project_name.lower().strip()}::{task_name}"
+                        task_name_to_data[composite_key] = task_data
+                        
+                        # Also store by task name only (may not be unique)
+                        if task_name not in task_name_to_data:
+                            task_name_to_data[task_name] = task_data
+                        
+                except Exception as e:
+                    self.logger.warning(f"Could not load tasks for project {project_id}: {str(e)}")
+            
+            self._task_cache[workspace_id] = all_tasks
+            self._task_name_to_id[workspace_id] = task_name_to_data
+            self.logger.info(f"Cached {len(all_tasks)} tasks from {len(self._project_cache.get(workspace_id, {}))} projects")
+            
+            # Load categories cache
+            self.logger.info("Loading categories cache...")
+            categories_result = self.expense_manager.get_expense_categories(workspace_id)
+            if categories_result.get('success') and categories_result.get('categories'):
+                categories = categories_result.get('categories', [])
+                self._category_cache[workspace_id] = {
+                    cat.get('id'): cat for cat in categories if cat.get('id')
+                }
+                self._category_name_to_id[workspace_id] = {
+                    cat.get('name', '').lower().strip(): cat.get('id') 
+                    for cat in categories if cat.get('name') and cat.get('id')
+                }
+                self.logger.info(f"Cached {len(categories)} expense categories")
+            else:
+                self.logger.warning("Could not load expense categories for caching")
+                self._category_cache[workspace_id] = {}
+                self._category_name_to_id[workspace_id] = {}
+            
+            self.logger.info("Name resolution caches loaded successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Error loading name resolution caches: {str(e)}")
+            # Initialize empty caches to prevent errors
+            for cache_type in ['_project_cache', '_task_cache', '_category_cache', 
+                             '_project_name_to_id', '_task_name_to_id', '_category_name_to_id']:
+                if not hasattr(self, cache_type):
+                    setattr(self, cache_type, {})
+                if workspace_id not in getattr(self, cache_type):
+                    getattr(self, cache_type)[workspace_id] = {}
 
     def _parse_csv_file(self, csv_file_path: str, column_mapping: Dict[str, str] = None) -> Dict[str, Any]:
         """
@@ -198,6 +320,23 @@ class CSVExpenseUploader:
                     'error': "CSV file is empty"
                 }
             
+            # Handle duplicate column names (like duplicate "Date" columns)
+            original_columns = list(df.columns)
+            seen_columns = {}
+            new_columns = []
+            
+            for col in original_columns:
+                if col in seen_columns:
+                    seen_columns[col] += 1
+                    new_col = f"{col}_{seen_columns[col]}"
+                    new_columns.append(new_col)
+                    self.logger.info(f"Renamed duplicate column '{col}' to '{new_col}'")
+                else:
+                    seen_columns[col] = 0
+                    new_columns.append(col)
+            
+            df.columns = new_columns
+            
             # Apply column mapping if provided
             if column_mapping:
                 df = df.rename(columns=column_mapping)
@@ -205,18 +344,27 @@ class CSVExpenseUploader:
             # Normalize column names (lowercase, replace spaces with underscores)
             df.columns = df.columns.str.lower().str.replace(' ', '_').str.replace('-', '_')
             
-            # Check for required columns
-            missing_columns = []
-            for col in self.REQUIRED_COLUMNS:
-                if col not in df.columns:
-                    missing_columns.append(col)
+            # Special handling for the format shown in the example CSV
+            # Map columns to standardized names
+            column_mappings = {
+                'project': 'project_name',
+                'task': 'task_name', 
+                'category': 'category_name'
+            }
             
-            if missing_columns:
+            df = df.rename(columns=column_mappings)
+            
+            # Check for required columns - either traditional or new format
+            has_traditional_format = all(col in df.columns for col in ['amount', 'description'])
+            has_new_format = all(col in df.columns for col in ['amount', 'project_name', 'task_name', 'category_name'])
+            
+            if not has_traditional_format and not has_new_format:
                 return {
                     'success': False,
-                    'error': f"Missing required columns: {missing_columns}",
+                    'error': f"CSV must have either [amount, description] OR [amount, project_name, task_name, category_name]",
                     'available_columns': list(df.columns),
-                    'required_columns': self.REQUIRED_COLUMNS
+                    'required_traditional': ['amount', 'description'],
+                    'required_new_format': ['amount', 'project_name', 'task_name', 'category_name']
                 }
             
             # Convert DataFrame to list of dictionaries
@@ -233,7 +381,8 @@ class CSVExpenseUploader:
                 'success': True,
                 'data': expenses_data,
                 'total_records': len(expenses_data),
-                'columns_found': list(df.columns)
+                'columns_found': list(df.columns),
+                'format_detected': 'new_format' if has_new_format else 'traditional'
             }
             
         except Exception as e:
@@ -243,13 +392,15 @@ class CSVExpenseUploader:
                 'error': str(e)
             }
 
-    def _validate_and_transform_data(self, raw_expenses: List[Dict], workspace_id: str) -> Dict[str, Any]:
+    def _validate_and_transform_data(self, raw_expenses: List[Dict], workspace_id: str, 
+                                   default_user_email: Optional[str] = None) -> Dict[str, Any]:
         """
         Validate and transform expense data
         
         Args:
             raw_expenses: Raw expense data from CSV
             workspace_id: Clockify workspace ID
+            default_user_email: Default user email to assign to expenses if not specified in CSV
             
         Returns:
             Dict containing validation results
@@ -260,26 +411,11 @@ class CSVExpenseUploader:
             valid_expenses = []
             validation_errors = []
             
-            # Cache projects for validation
-            projects_result = self.project_manager.get_all_projects(workspace_id)
-            if projects_result.get('success'):
-                projects = projects_result.get('projects', [])
-                self._project_cache[workspace_id] = {
-                    proj['id']: proj for proj in projects
-                }
-                project_name_to_id = {
-                    proj['name'].lower(): proj['id'] for proj in projects
-                }
-            else:
-                self.logger.warning("Could not load projects for validation")
-                self._project_cache[workspace_id] = {}
-                project_name_to_id = {}
-            
             for i, raw_expense in enumerate(raw_expenses):
                 try:
                     # Validate and transform individual expense
                     transformed_expense = self._validate_single_expense(
-                        raw_expense, i, workspace_id, project_name_to_id
+                        raw_expense, i, workspace_id, default_user_email
                     )
                     
                     if transformed_expense['valid']:
@@ -318,7 +454,7 @@ class CSVExpenseUploader:
             }
 
     def _validate_single_expense(self, raw_expense: Dict, row_index: int, 
-                                workspace_id: str, project_name_to_id: Dict) -> Dict[str, Any]:
+                                workspace_id: str, default_user_email: Optional[str] = None) -> Dict[str, Any]:
         """
         Validate and transform a single expense record
         
@@ -326,7 +462,7 @@ class CSVExpenseUploader:
             raw_expense: Raw expense data
             row_index: Row index for error reporting
             workspace_id: Clockify workspace ID
-            project_name_to_id: Project name to ID mapping
+            default_user_email: Default user email to assign to expenses if not specified in CSV
             
         Returns:
             Dict containing validation result
@@ -350,24 +486,60 @@ class CSVExpenseUploader:
                     else:
                         amount = float(amount_raw)
                     
-                    if amount <= 0:
-                        errors.append("Amount must be greater than 0")
+                    if amount < 0:  # Allow 0 amounts as per the example CSV
+                        errors.append("Amount cannot be negative")
                     else:
                         expense_data['amount'] = amount
                         
                 except (ValueError, InvalidOperation):
                     errors.append(f"Invalid amount format: {amount_raw}")
             
-            # Description validation
+            # Description validation - required unless we have project+task+category
             description = raw_expense.get('description')
-            if not description or description.strip() == '':
-                errors.append("Description is required")
-            else:
+            project_name = raw_expense.get('project_name')
+            task_name = raw_expense.get('task_name')
+            category_name = raw_expense.get('category_name')
+            
+            # Check if we have the new format (project+task+category)
+            has_new_format_data = all([project_name, task_name, category_name])
+            
+            if not description and not has_new_format_data:
+                errors.append("Description is required when project/task/category are not provided")
+            elif description:
                 expense_data['description'] = str(description).strip()
+            elif has_new_format_data:
+                # Generate description from project+task+category
+                expense_data['description'] = f"{task_name} - {category_name} ({project_name})"
+            
+            # Project name resolution
+            if project_name and project_name.strip():
+                project_id = self._resolve_project_name_to_id(workspace_id, project_name.strip())
+                if project_id:
+                    expense_data['projectId'] = project_id
+                else:
+                    errors.append(f"Project name not found: {project_name}")
+            
+            # Task name resolution
+            if task_name and task_name.strip() and project_name and project_name.strip():
+                task_id = self._resolve_task_name_to_id(workspace_id, task_name.strip(), project_name.strip())
+                if task_id:
+                    expense_data['taskId'] = task_id
+                else:
+                    errors.append(f"Task name '{task_name}' not found in project '{project_name}'")
+            
+            # Category name resolution
+            if category_name and category_name.strip():
+                category_id = self._resolve_category_name_to_id(workspace_id, category_name.strip())
+                if category_id:
+                    expense_data['categoryId'] = category_id
+                else:
+                    # For categories, we might want to be more lenient since they might be free-text
+                    self.logger.warning(f"Category name not found in Clockify categories: {category_name}")
+                    expense_data['category'] = str(category_name).strip()
             
             # Optional field validation and transformation
             
-            # Date validation
+            # Date validation - handle the first date column
             date_raw = raw_expense.get('date')
             if date_raw and date_raw != '':
                 try:
@@ -392,27 +564,18 @@ class CSVExpenseUploader:
                 except Exception as e:
                     errors.append(f"Date parsing error: {str(e)}")
             
-            # Project validation
+            # Handle existing project_id if provided
             project_id = raw_expense.get('project_id')
-            project_name = raw_expense.get('project_name')
-            
-            if project_id and project_id != '':
+            if project_id and project_id != '' and 'projectId' not in expense_data:
                 # Validate project_id exists
                 if workspace_id in self._project_cache and project_id in self._project_cache[workspace_id]:
                     expense_data['projectId'] = project_id
                 else:
                     errors.append(f"Project ID not found: {project_id}")
-            elif project_name and project_name != '':
-                # Try to resolve project name to ID
-                project_name_lower = project_name.lower().strip()
-                if project_name_lower in project_name_to_id:
-                    expense_data['projectId'] = project_name_to_id[project_name_lower]
-                else:
-                    errors.append(f"Project name not found: {project_name}")
             
-            # Category
+            # Category (as free text if no category_name was provided)
             category = raw_expense.get('category')
-            if category and category != '':
+            if category and category != '' and 'categoryId' not in expense_data and 'category' not in expense_data:
                 expense_data['category'] = str(category).strip()
             
             # Billable
@@ -446,15 +609,22 @@ class CSVExpenseUploader:
                 else:
                     expense_data['tagIds'] = tags_raw
             
-            # Task ID
+            # Task ID (if provided directly)
             task_id = raw_expense.get('task_id')
-            if task_id and task_id != '':
+            if task_id and task_id != '' and 'taskId' not in expense_data:
                 expense_data['taskId'] = str(task_id).strip()
             
             # Receipt
             receipt = raw_expense.get('receipt')
             if receipt and receipt != '':
                 expense_data['receipt'] = str(receipt).strip()
+            
+            # User email (if provided)
+            user_email = raw_expense.get('user_email')
+            if user_email and user_email != '':
+                expense_data['userEmail'] = str(user_email).strip()
+            elif default_user_email:
+                expense_data['userEmail'] = default_user_email
             
             return {
                 'valid': len(errors) == 0,
@@ -468,6 +638,84 @@ class CSVExpenseUploader:
                 'expense_data': {},
                 'errors': [f"Validation error: {str(e)}"]
             }
+
+    def _resolve_project_name_to_id(self, workspace_id: str, project_name: str) -> Optional[str]:
+        """
+        Resolve project name to project ID
+        
+        Args:
+            workspace_id: Clockify workspace ID
+            project_name: Project name to resolve
+            
+        Returns:
+            Project ID if found, None otherwise
+        """
+        try:
+            project_name_lower = project_name.lower().strip()
+            name_to_id_map = self._project_name_to_id.get(workspace_id, {})
+            return name_to_id_map.get(project_name_lower)
+        except Exception as e:
+            self.logger.warning(f"Error resolving project name '{project_name}': {str(e)}")
+            return None
+
+    def _resolve_task_name_to_id(self, workspace_id: str, task_name: str, project_name: str) -> Optional[str]:
+        """
+        Resolve task name to task ID within a specific project
+        
+        Args:
+            workspace_id: Clockify workspace ID
+            task_name: Task name to resolve
+            project_name: Project name for context
+            
+        Returns:
+            Task ID if found, None otherwise
+        """
+        try:
+            task_name_lower = task_name.lower().strip()
+            project_name_lower = project_name.lower().strip()
+            
+            task_name_to_data_map = self._task_name_to_id.get(workspace_id, {})
+            
+            # First try with project-specific key (most accurate)
+            composite_key = f"{project_name_lower}::{task_name_lower}"
+            task_data = task_name_to_data_map.get(composite_key)
+            
+            if task_data:
+                return task_data.get('id')
+            
+            # Fallback: try task name only (less accurate, may match wrong project)
+            task_data = task_name_to_data_map.get(task_name_lower)
+            if task_data:
+                # Verify it's in the right project
+                if task_data.get('project_name', '').lower().strip() == project_name_lower:
+                    return task_data.get('id')
+                else:
+                    self.logger.warning(f"Task '{task_name}' found but in different project: {task_data.get('project_name')}")
+            
+            return None
+            
+        except Exception as e:
+            self.logger.warning(f"Error resolving task name '{task_name}' in project '{project_name}': {str(e)}")
+            return None
+
+    def _resolve_category_name_to_id(self, workspace_id: str, category_name: str) -> Optional[str]:
+        """
+        Resolve category name to category ID
+        
+        Args:
+            workspace_id: Clockify workspace ID
+            category_name: Category name to resolve
+            
+        Returns:
+            Category ID if found, None otherwise
+        """
+        try:
+            category_name_lower = category_name.lower().strip()
+            name_to_id_map = self._category_name_to_id.get(workspace_id, {})
+            return name_to_id_map.get(category_name_lower)
+        except Exception as e:
+            self.logger.warning(f"Error resolving category name '{category_name}': {str(e)}")
+            return None
 
     def _upload_expenses_in_chunks(self, workspace_id: str, valid_expenses: List[Dict], 
                                   chunk_size: int) -> Dict[str, Any]:
@@ -604,12 +852,13 @@ class CSVExpenseUploader:
         except Exception as e:
             self.logger.warning(f"Failed to export upload results: {str(e)}")
 
-    def generate_csv_template(self, output_path: str = None) -> Dict[str, Any]:
+    def generate_csv_template(self, output_path: str = None, template_format: str = "new") -> Dict[str, Any]:
         """
         Generate a CSV template file for expense uploads
         
         Args:
             output_path: Optional custom output path
+            template_format: "new" for project/task/category format, "traditional" for description format
             
         Returns:
             Dict containing template generation result
@@ -617,37 +866,57 @@ class CSVExpenseUploader:
         try:
             if not output_path:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = f"expense_upload_template_{timestamp}.csv"
+                output_path = f"expense_upload_template_{template_format}_{timestamp}.csv"
             
-            # Sample data for template - all rows must have the same fields
-            template_data = [
-                {
-                    'amount': 25.50,
-                    'description': 'Business lunch with client',
-                    'date': '2024-01-15',
-                    'project_id': '',
-                    'project_name': 'Project Alpha',
-                    'category': 'Meals',
-                    'billable': 'true',
-                    'currency': 'USD',
-                    'tags': 'client,meal',
-                    'task_id': '',
-                    'receipt': 'receipt_001.pdf'
-                },
-                {
-                    'amount': 15.00,
-                    'description': 'Taxi to office',
-                    'date': '2024-01-16',
-                    'project_id': 'abc123',
-                    'project_name': '',
-                    'category': 'Transportation',
-                    'billable': 'false',
-                    'currency': 'USD',
-                    'tags': 'transportation',
-                    'task_id': '',
-                    'receipt': ''
-                }
-            ]
+            if template_format == "new":
+                # Template for the new format with project/task/category names
+                template_data = [
+                    {
+                        'date': '6/1/2025',
+                        'project': 'Repare.Schonhoft.PanCan.PBMC',
+                        'task': 'NGS Reagents and Lab Operations Cost',
+                        'amount': 1345.85,
+                        'category': 'NGS Reagents',
+                        'user_email': 'john.doe@company.com'
+                    },
+                    {
+                        'date': '6/1/2025',
+                        'project': 'LigoChem.Slocum.PanCan.TROP2',
+                        'task': 'IMG Reagents and Lab Operations Cost',
+                        'amount': 934.20,
+                        'category': 'IMG Reagents'
+                    }
+                ]
+            else:
+                # Traditional template format
+                template_data = [
+                    {
+                        'amount': 25.50,
+                        'description': 'Business lunch with client',
+                        'date': '2024-01-15',
+                        'project_id': '',
+                        'project_name': 'Project Alpha',
+                        'category': 'Meals',
+                        'billable': 'true',
+                        'currency': 'USD',
+                        'tags': 'client,meal',
+                        'task_id': '',
+                        'receipt': 'receipt_001.pdf'
+                    },
+                    {
+                        'amount': 15.00,
+                        'description': 'Taxi to office',
+                        'date': '2024-01-16',
+                        'project_id': 'abc123',
+                        'project_name': '',
+                        'category': 'Transportation',
+                        'billable': 'false',
+                        'currency': 'USD',
+                        'tags': 'transportation',
+                        'task_id': '',
+                        'receipt': ''
+                    }
+                ]
             
             # Write template CSV
             with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
@@ -656,11 +925,12 @@ class CSVExpenseUploader:
                     writer.writeheader()
                     writer.writerows(template_data)
             
-            self.logger.info(f"CSV template generated: {output_path}")
+            self.logger.info(f"CSV template ({template_format} format) generated: {output_path}")
             
             return {
                 'success': True,
                 'template_path': output_path,
+                'template_format': template_format,
                 'columns_included': list(template_data[0].keys()) if template_data else [],
                 'sample_rows': len(template_data)
             }

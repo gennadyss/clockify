@@ -490,7 +490,7 @@ class ExpenseManager:
         # Optional fields
         optional_fields = [
             'projectId', 'taskId', 'tagIds', 'billable', 'invoiced',
-            'customFields', 'category', 'receipt', 'date', 'currency'
+            'customFields', 'category', 'receipt', 'date', 'currency', 'userEmail'
         ]
         
         for field in optional_fields:

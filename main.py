@@ -97,7 +97,8 @@ def main_tasks_access(client_id: str = None, client_name: str = None, project_id
 
 
 def main_upload_expenses(workspace_id: str, csv_file: str, dry_run: bool = False, 
-                        chunk_size: int = 50, generate_template: bool = False):
+                        chunk_size: int = 50, generate_template: bool = False,
+                        user_email: str = None):
     """
     Main execution function for Expense Upload
     
@@ -107,6 +108,7 @@ def main_upload_expenses(workspace_id: str, csv_file: str, dry_run: bool = False
         dry_run: If True, validate only without uploading
         chunk_size: Number of expenses to upload in each batch
         generate_template: If True, generate a CSV template and exit
+        user_email: Default user email to assign to expenses if not specified in CSV
     """
     print("💰 Starting Clockify Expense Upload")
     print("=" * 50)
@@ -149,7 +151,8 @@ def main_upload_expenses(workspace_id: str, csv_file: str, dry_run: bool = False
             csv_file_path=csv_file,
             workspace_id=workspace_id,
             dry_run=dry_run,
-            chunk_size=chunk_size
+            chunk_size=chunk_size,
+            default_user_email=user_email
         )
         
         # Report results
@@ -299,6 +302,7 @@ Examples:
   # Expense Upload
   python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv"
   python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv" --dry-run
+  python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv" --user-email "user@example.com"
   python main.py upload-expenses --generate-template
   
   # Module Demonstration
@@ -338,6 +342,8 @@ Examples:
                                 help='Number of expenses to upload in each batch (default: 50)')
     expenses_parser.add_argument('--generate-template', action='store_true',
                                 help='Generate a CSV template file and exit')
+    expenses_parser.add_argument('--user-email', type=str, required=False,
+                                help='Default user email to assign to expenses if not specified in CSV')
     
     # Demo subcommand
     demo_parser = subparsers.add_parser(
@@ -376,7 +382,8 @@ Examples:
             csv_file=args.csv_file,
             dry_run=args.dry_run,
             chunk_size=args.chunk_size,
-            generate_template=args.generate_template
+            generate_template=args.generate_template,
+            user_email=args.user_email
         )
         
     elif args.process == 'demo':
