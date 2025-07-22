@@ -78,9 +78,9 @@ class ExpenseManager:
             
             # Build endpoint URL
             if user_id:
-                endpoint = f"workspaces/{workspace_id}/user/{user_id}/expenses"
+                endpoint = f"/workspaces/{workspace_id}/user/{user_id}/expenses"
             else:
-                endpoint = f"workspaces/{workspace_id}/expenses"
+                endpoint = f"/workspaces/{workspace_id}/expenses"
             
             # Build query parameters
             params = {
@@ -97,8 +97,20 @@ class ExpenseManager:
             # Make API request
             response = self.api_client.get(endpoint, params=params)
             
-            if response.get('success'):
-                expenses_data = response.get('data', [])
+            # Check if response contains an error
+            if self.api_client.is_error_response(response):
+                error_msg = self.api_client.get_error_message(response)
+                self.logger.error(f"Failed to retrieve expenses: {error_msg}")
+                return {
+                    'expenses': [],
+                    'total_count': 0,
+                    'workspace_id': workspace_id,
+                    'success': False,
+                    'error': error_msg
+                }
+            else:
+                # Successful response - Clockify returns expense list directly
+                expenses_data = response if isinstance(response, list) else []
                 
                 result = {
                     'expenses': expenses_data,
@@ -117,15 +129,6 @@ class ExpenseManager:
                 
                 self.logger.info(f"Retrieved {len(expenses_data)} expenses successfully")
                 return result
-            else:
-                self.logger.error(f"Failed to retrieve expenses: {response.get('error', 'Unknown error')}")
-                return {
-                    'expenses': [],
-                    'total_count': 0,
-                    'workspace_id': workspace_id,
-                    'success': False,
-                    'error': response.get('error', 'Unknown error')
-                }
                 
         except Exception as e:
             self.logger.error(f"Error retrieving expenses: {str(e)}")
@@ -151,7 +154,7 @@ class ExpenseManager:
         try:
             self.logger.info(f"Retrieving expense {expense_id} from workspace {workspace_id}")
             
-            endpoint = f"workspaces/{workspace_id}/expenses/{expense_id}"
+            endpoint = f"/workspaces/{workspace_id}/expenses/{expense_id}"
             response = self.api_client.get(endpoint)
             
             if response.get('success'):
@@ -189,7 +192,7 @@ class ExpenseManager:
 
     def create_expense(self, workspace_id: str, expense_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Create a new expense
+        Create a new expense using the Clockify API
         
         Args:
             workspace_id: Clockify workspace ID
@@ -201,46 +204,70 @@ class ExpenseManager:
         try:
             self.logger.info(f"Creating new expense in workspace {workspace_id}")
             
-            # Validate required expense fields
-            required_fields = ['amount', 'description']
+            # Validate required expense fields for Clockify API
+            required_fields = ['amount', 'categoryId', 'date', 'projectId', 'userId']
             for field in required_fields:
                 if field not in expense_data:
                     raise ValueError(f"Required field '{field}' missing from expense data")
             
-            # Format expense data
-            formatted_expense = self._format_expense_data(expense_data)
+            # Prepare form data for multipart/form-data request
+            form_data = {
+                'amount': str(expense_data['amount']),
+                'categoryId': expense_data['categoryId'],
+                'date': expense_data['date'],  # Should be ISO format: 2020-01-01T00:00:00Z
+                'projectId': expense_data['projectId'],
+                'userId': expense_data['userId']
+            }
             
-            endpoint = f"workspaces/{workspace_id}/expenses"
-            response = self.api_client.post(endpoint, data=formatted_expense)
+            # Add optional fields
+            if 'billable' in expense_data:
+                form_data['billable'] = str(expense_data['billable']).lower()
+            if 'notes' in expense_data:
+                form_data['notes'] = expense_data['notes']
+            if 'taskId' in expense_data:
+                form_data['taskId'] = expense_data['taskId']
             
-            if response.get('success'):
-                created_expense = response.get('data')
-                
-                result = {
-                    'expense': created_expense,
-                    'workspace_id': workspace_id,
-                    'created_at': datetime.now(timezone.utc).isoformat(),
-                    'success': True
-                }
-                
-                self.logger.info(f"Created expense successfully: {created_expense.get('id', 'Unknown ID')}")
-                return result
+            # Handle file upload - REQUIRED by Clockify API
+            files = {}
+            if 'receipt_file' in expense_data and expense_data['receipt_file']:
+                files['file'] = expense_data['receipt_file']
             else:
-                self.logger.error(f"Failed to create expense: {response.get('error')}")
+                # Use /dev/null since we know it works with curl
+                files['file'] = ('receipt.txt', open('/dev/null', 'rb'))
+            
+            endpoint = f"/workspaces/{workspace_id}/expenses"
+            
+            response = self.api_client.post(endpoint, data=form_data, files=files)
+            
+            if 'error' in response:
+                self.logger.error(f"Failed to create expense: {response['error']}")
                 return {
-                    'expense': None,
-                    'workspace_id': workspace_id,
                     'success': False,
-                    'error': response.get('error', 'Unknown error')
+                    'error': response['error'],
+                    'workspace_id': workspace_id,
+                    'expense_data': expense_data,
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 }
-                
-        except Exception as e:
-            self.logger.error(f"Error creating expense: {str(e)}")
-            return {
-                'expense': None,
+            
+            result = {
+                'success': True,
+                'expense': response,
                 'workspace_id': workspace_id,
+                'created_at': datetime.now(timezone.utc).isoformat()
+            }
+            
+            self.logger.info(f"Created expense successfully: {response.get('id', 'Unknown ID')}")
+            return result
+            
+        except Exception as e:
+            error_msg = f"Failed to create expense: {str(e)}"
+            self.logger.error(error_msg)
+            return {
                 'success': False,
-                'error': str(e)
+                'error': error_msg,
+                'workspace_id': workspace_id,
+                'expense_data': expense_data,
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
     def update_expense(self, workspace_id: str, expense_id: str, expense_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -261,7 +288,7 @@ class ExpenseManager:
             # Format expense data
             formatted_expense = self._format_expense_data(expense_data)
             
-            endpoint = f"workspaces/{workspace_id}/expenses/{expense_id}"
+            endpoint = f"/workspaces/{workspace_id}/expenses/{expense_id}"
             response = self.api_client.put(endpoint, data=formatted_expense)
             
             if response.get('success'):
@@ -311,7 +338,7 @@ class ExpenseManager:
         try:
             self.logger.info(f"Deleting expense {expense_id} from workspace {workspace_id}")
             
-            endpoint = f"workspaces/{workspace_id}/expenses/{expense_id}"
+            endpoint = f"/workspaces/{workspace_id}/expenses/{expense_id}"
             response = self.api_client.delete(endpoint)
             
             if response.get('success'):
@@ -519,11 +546,23 @@ class ExpenseManager:
         try:
             self.logger.info(f"Retrieving expense categories for workspace {workspace_id}")
             
-            endpoint = f"workspaces/{workspace_id}/expense-categories"
+            endpoint = f"/workspaces/{workspace_id}/expenses/categories"
             response = self.api_client.get(endpoint)
             
-            if response.get('success'):
-                categories = response.get('data', [])
+            # Check if response contains an error
+            if self.api_client.is_error_response(response):
+                error_msg = self.api_client.get_error_message(response)
+                self.logger.warning(f"Could not retrieve expense categories: {error_msg}")
+                return {
+                    'categories': [],
+                    'total_count': 0,
+                    'workspace_id': workspace_id,
+                    'success': False,
+                    'error': error_msg
+                }
+            else:
+                # Successful response - Clockify returns categories in 'categories' field
+                categories = response.get('categories', []) if response else []
                 
                 result = {
                     'categories': categories,
@@ -535,15 +574,6 @@ class ExpenseManager:
                 
                 self.logger.info(f"Retrieved {len(categories)} expense categories")
                 return result
-            else:
-                self.logger.warning(f"Could not retrieve expense categories: {response.get('error')}")
-                return {
-                    'categories': [],
-                    'total_count': 0,
-                    'workspace_id': workspace_id,
-                    'success': False,
-                    'error': response.get('error', 'Unknown error')
-                }
                 
         except Exception as e:
             self.logger.error(f"Error retrieving expense categories: {str(e)}")

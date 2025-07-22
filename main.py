@@ -30,6 +30,7 @@ from Clients.ClientManager import ClientManager
 from Expenses.ExpenseManager import ExpenseManager
 from UploadExpenses.CSVExpenseUploader import CSVExpenseUploader
 from Utils.logging import Logger
+from Config.settings import settings
 
 
 def main_tasks_access(client_id: str = None, client_name: str = None, project_id: str = None, project_name: str = None):
@@ -172,21 +173,47 @@ def main_upload_expenses(workspace_id: str, csv_file: str, dry_run: bool = False
                 
                 print(f"\n📝 Review validation results and fix any errors before uploading")
             else:
-                upload_results = result['upload_results']
-                print(f"\n✅ Upload completed successfully")
-                print(f"📊 Total CSV records: {result['total_records_in_csv']}")
-                print(f"✅ Valid records: {result['valid_records']}")
-                print(f"❌ Invalid records: {result['invalid_records']}")
-                print(f"💰 Expenses created: {upload_results['total_created']}")
-                print(f"❌ Upload failures: {upload_results['total_failed']}")
+                print(f"\n🎉 Expense upload completed successfully!")
+                print("=" * 50)
+                print(f"📊 Total CSV records: {result.get('total_records_in_csv', 0)}")
+                print(f"✅ Valid records: {result.get('valid_records', 0)}")
+                print(f"❌ Invalid records: {result.get('invalid_records', 0)}")
+                print(f"✅ Successfully created: {result.get('total_created', 0)}")
+                print(f"❌ Failed to create: {result.get('total_failed', 0)}")
                 
-                if result['invalid_records'] > 0:
+                success_rate = result.get('upload_summary', {}).get('success_rate', 0)
+                print(f"📈 Success rate: {success_rate:.1f}%")
+                
+                if result.get('invalid_records', 0) > 0:
                     print(f"\n⚠️  Validation errors prevented {result['invalid_records']} records from being processed")
                 
-                if upload_results['total_failed'] > 0:
-                    print(f"\n⚠️  {upload_results['total_failed']} expenses failed to upload")
+                if result.get('total_failed', 0) > 0:
+                    print(f"\n⚠️  Some expenses failed to upload:")
+                    for failed in result.get('failed_expenses', [])[:3]:
+                        print(f"   • {failed.get('error', 'Unknown error')}")
+                    if len(result.get('failed_expenses', [])) > 3:
+                        print(f"   ... and {len(result.get('failed_expenses', [])) - 3} more errors")
         else:
             print(f"\n❌ Upload failed: {result.get('error', 'Unknown error')}")
+            
+            # Show user suggestions if available
+            if 'available_users' in result and result['available_users']:
+                print(f"\n📋 Available users in workspace:")
+                for user in result['available_users'][:10]:
+                    print(f"   • {user.get('email', 'No email')} - {user.get('name', 'No name')}")
+                if len(result['available_users']) > 10:
+                    print(f"   ... and {len(result['available_users']) - 10} more users")
+                print(f"\n💡 Try using one of the emails above with --user-email parameter")
+            
+            if 'validation_errors' in result and result['validation_errors']:
+                print(f"\n⚠️  Found {len(result['validation_errors'])} validation errors:")
+                for error in result['validation_errors'][:5]:  # Show first 5 errors
+                    if isinstance(error, dict) and 'row_index' in error:
+                        print(f"   Row {error['row_index']}: {', '.join(error.get('errors', []))}")
+                    else:
+                        print(f"   Error: {error}")
+                if len(result['validation_errors']) > 5:
+                    print(f"   ... and {len(result['validation_errors']) - 5} more errors")
             sys.exit(1)
         
         print(f"\n💰 Clockify Expense Upload completed")
@@ -299,10 +326,11 @@ Examples:
   python main.py tasks-access --client-name "EXT.FFS"
   python main.py tasks-access --project-id "abc123"
   
-  # Expense Upload
-  python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv"
-  python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv" --dry-run
-  python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv" --user-email "user@example.com"
+  # Expense Upload (workspace-id from .env or parameter)
+  python main.py upload-expenses --csv-file "expenses.csv"  # uses CLOCKIFY_WORKSPACE_ID from .env
+  python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv"  # explicit workspace
+  python main.py upload-expenses --csv-file "expenses.csv" --dry-run
+  python main.py upload-expenses --csv-file "expenses.csv" --user-email "user@example.com"
   python main.py upload-expenses --generate-template
   
   # Module Demonstration
@@ -333,7 +361,7 @@ Examples:
         help='CSV-based expense upload and management'
     )
     expenses_parser.add_argument('--workspace-id', type=str, required=False,
-                                help='Clockify workspace ID (required unless --generate-template)')
+                                help='Clockify workspace ID (uses CLOCKIFY_WORKSPACE_ID from .env if not provided)')
     expenses_parser.add_argument('--csv-file', type=str, required=False,
                                 help='Path to CSV file containing expenses (required unless --generate-template)')
     expenses_parser.add_argument('--dry-run', action='store_true',
@@ -369,16 +397,26 @@ Examples:
     elif args.process == 'upload-expenses':
         # Validate arguments for expense upload
         if not args.generate_template:
-            if not args.workspace_id:
-                print("❌ Error: --workspace-id is required (unless using --generate-template)")
-                sys.exit(1)
+            # Use workspace ID from args or fall back to environment configuration
+            workspace_id = args.workspace_id
+            if not workspace_id:
+                workspace_id = settings.clockify_workspace_id
+                if workspace_id:
+                    print(f"ℹ️  Using workspace ID from environment: {workspace_id}")
+                else:
+                    print("❌ Error: --workspace-id is required (not configured in .env file)")
+                    print("   Either provide --workspace-id parameter or set CLOCKIFY_WORKSPACE_ID in .env")
+                    sys.exit(1)
             
             if not args.csv_file:
                 print("❌ Error: --csv-file is required (unless using --generate-template)")
                 sys.exit(1)
+        else:
+            # For generate-template, workspace_id can be None
+            workspace_id = args.workspace_id or settings.clockify_workspace_id
         
         main_upload_expenses(
-            workspace_id=args.workspace_id,
+            workspace_id=workspace_id,
             csv_file=args.csv_file,
             dry_run=args.dry_run,
             chunk_size=args.chunk_size,

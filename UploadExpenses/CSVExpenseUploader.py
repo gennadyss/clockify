@@ -89,11 +89,79 @@ class CSVExpenseUploader:
         self._project_cache = {}
         self._task_cache = {}
         self._category_cache = {}
+        self._user_cache = {}
         self._project_name_to_id = {}
         self._task_name_to_id = {}
         self._category_name_to_id = {}
+        self._user_email_to_id = {}
         
         self.logger.info("CSVExpenseUploader initialized successfully")
+
+    def _validate_user_in_workspace(self, user_email: str, workspace_id: str) -> Dict[str, Any]:
+        """
+        Validate that a user exists in the specified workspace
+        
+        Args:
+            user_email: Email of the user to validate
+            workspace_id: Clockify workspace ID
+            
+        Returns:
+            Dict containing validation result and suggestions
+        """
+        try:
+            self.logger.info(f"Validating user {user_email} exists in workspace {workspace_id}")
+            
+            # Get all users in workspace
+            from Users.Users import UserManager
+            user_manager = UserManager(logger=self.logger)
+            users_result = user_manager.get_all_users()
+            
+            if self.api_client.is_error_response(users_result):
+                return {
+                    'valid': False,
+                    'error': f"Failed to fetch users from workspace: {self.api_client.get_error_message(users_result)}"
+                }
+            
+            users = users_result.get('items', [])
+            if not users:
+                return {
+                    'valid': False,
+                    'error': "No users found in workspace"
+                }
+            
+            # Check if the email exists (case-insensitive)
+            user_email_lower = user_email.lower().strip()
+            existing_emails = [user.get('email', '').lower().strip() for user in users if user.get('email')]
+            
+            if user_email_lower not in existing_emails:
+                # Suggest similar emails
+                suggested_users = []
+                for user in users[:10]:  # Limit to first 10 users
+                    if user.get('email') and user.get('name'):
+                        suggested_users.append({
+                            'email': user['email'],
+                            'name': user['name'],
+                            'id': user['id']
+                        })
+                
+                return {
+                    'valid': False,
+                    'error': f"User '{user_email}' not found in workspace. Please check the email address or use one of the suggested users below.",
+                    'suggested_users': suggested_users
+                }
+            
+            self.logger.info(f"User {user_email} validated successfully")
+            return {
+                'valid': True,
+                'user_email': user_email
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error validating user {user_email}: {str(e)}")
+            return {
+                'valid': False,
+                'error': f"Error validating user: {str(e)}"
+            }
 
     def upload_from_csv(self, csv_file_path: str, workspace_id: str, 
                        dry_run: bool = False, chunk_size: int = 50,
@@ -121,7 +189,19 @@ class CSVExpenseUploader:
             if not self.file_utils.file_exists(csv_file_path):
                 raise FileNotFoundError(f"CSV file not found: {csv_file_path}")
             
-            # Step 2: Pre-load caches for name resolution
+            # Step 2: Validate user exists in workspace if specified
+            if default_user_email:
+                user_validation = self._validate_user_in_workspace(default_user_email, workspace_id)
+                if not user_validation['valid']:
+                    return {
+                        'success': False,
+                        'error': user_validation['error'],
+                        'available_users': user_validation.get('suggested_users', []),
+                        'workspace_id': workspace_id,
+                        'processed_at': datetime.now(timezone.utc).isoformat()
+                    }
+                    
+            # Step 3: Pre-load caches for name resolution
             self._load_name_resolution_caches(workspace_id)
             
             # Step 3: Parse CSV file
@@ -163,21 +243,34 @@ class CSVExpenseUploader:
             
             # Step 7: Generate comprehensive results
             final_result = {
-                'success': upload_result['success'],
-                'workspace_id': workspace_id,
-                'csv_file_path': csv_file_path,
+                'success': upload_result.get('success', False),
                 'total_records_in_csv': len(raw_expenses),
                 'valid_records': len(valid_expenses),
                 'invalid_records': len(validation_errors),
                 'validation_errors': validation_errors,
-                'upload_results': upload_result,
-                'processed_at': datetime.now(timezone.utc).isoformat()
+                'total_created': upload_result.get('total_created', 0),
+                'total_failed': upload_result.get('total_failed', 0),
+                'created_expenses': upload_result.get('created_expenses', []),
+                'failed_expenses': upload_result.get('failed_expenses', []),
+                'chunk_results': upload_result.get('chunk_results', []),
+                'workspace_id': workspace_id,
+                'csv_file_path': csv_file_path,
+                'processed_at': datetime.now(timezone.utc).isoformat(),
+                'upload_summary': {
+                    'total_processed': len(valid_expenses),
+                    'successful_uploads': upload_result.get('total_created', 0),
+                    'failed_uploads': upload_result.get('total_failed', 0),
+                    'success_rate': (upload_result.get('total_created', 0) / len(valid_expenses) * 100) if valid_expenses else 0
+                }
             }
             
-            # Step 8: Export results
-            self._export_upload_results(final_result)
+            # Export results (optional)
+            try:
+                self._export_upload_results(final_result)
+            except Exception as e:
+                self.logger.warning(f"Failed to export validation results: {e}")
             
-            self.logger.info(f"CSV upload completed: {upload_result.get('total_created', 0)} expenses created")
+            self.logger.info(f"CSV validation completed: {len(valid_expenses)} valid expenses (upload not supported)")
             return final_result
             
         except Exception as e:
@@ -199,6 +292,26 @@ class CSVExpenseUploader:
         """
         try:
             self.logger.info("Loading name resolution caches...")
+            
+            # Load users cache
+            self.logger.info("Loading users cache...")
+            from Users.Users import UserManager
+            user_manager = UserManager(logger=self.logger)
+            users_result = user_manager.get_all_users()
+            if users_result.get('items'):
+                users = users_result.get('items', [])
+                self._user_cache[workspace_id] = {
+                    user['id']: user for user in users
+                }
+                self._user_email_to_id[workspace_id] = {
+                    user['email'].lower().strip(): user['id'] 
+                    for user in users if user.get('email')
+                }
+                self.logger.info(f"Cached {len(users)} users")
+            else:
+                self.logger.warning("Could not load users for caching")
+                self._user_cache[workspace_id] = {}
+                self._user_email_to_id[workspace_id] = {}
             
             # Load projects cache
             self.logger.info("Loading projects cache...")
@@ -283,8 +396,8 @@ class CSVExpenseUploader:
         except Exception as e:
             self.logger.error(f"Error loading name resolution caches: {str(e)}")
             # Initialize empty caches to prevent errors
-            for cache_type in ['_project_cache', '_task_cache', '_category_cache', 
-                             '_project_name_to_id', '_task_name_to_id', '_category_name_to_id']:
+            for cache_type in ['_project_cache', '_task_cache', '_category_cache', '_user_cache',
+                             '_project_name_to_id', '_task_name_to_id', '_category_name_to_id', '_user_email_to_id']:
                 if not hasattr(self, cache_type):
                     setattr(self, cache_type, {})
                 if workspace_id not in getattr(self, cache_type):
@@ -511,13 +624,15 @@ class CSVExpenseUploader:
                 # Generate description from project+task+category
                 expense_data['description'] = f"{task_name} - {category_name} ({project_name})"
             
-            # Project name resolution
+            # Project name resolution - REQUIRED by Clockify API
             if project_name and project_name.strip():
                 project_id = self._resolve_project_name_to_id(workspace_id, project_name.strip())
                 if project_id:
                     expense_data['projectId'] = project_id
                 else:
                     errors.append(f"Project name not found: {project_name}")
+            else:
+                errors.append("Project name is required - must match a Clockify project name")
             
             # Task name resolution
             if task_name and task_name.strip() and project_name and project_name.strip():
@@ -527,15 +642,15 @@ class CSVExpenseUploader:
                 else:
                     errors.append(f"Task name '{task_name}' not found in project '{project_name}'")
             
-            # Category name resolution
+            # Category name resolution - REQUIRED by Clockify API
             if category_name and category_name.strip():
                 category_id = self._resolve_category_name_to_id(workspace_id, category_name.strip())
                 if category_id:
                     expense_data['categoryId'] = category_id
                 else:
-                    # For categories, we might want to be more lenient since they might be free-text
-                    self.logger.warning(f"Category name not found in Clockify categories: {category_name}")
-                    expense_data['category'] = str(category_name).strip()
+                    errors.append(f"Category name not found in Clockify categories: {category_name}")
+            else:
+                errors.append("Category name is required - must match a Clockify expense category")
             
             # Optional field validation and transformation
             
@@ -555,12 +670,15 @@ class CSVExpenseUploader:
                                 continue
                         
                         if parsed_date:
-                            expense_data['date'] = parsed_date.isoformat()
+                            expense_data['date'] = parsed_date.isoformat() + 'Z'
                         else:
                             errors.append(f"Invalid date format: {date_raw}")
                     else:
                         # Assume it's already a datetime
-                        expense_data['date'] = date_raw.isoformat() if hasattr(date_raw, 'isoformat') else str(date_raw)
+                        date_str = date_raw.isoformat() if hasattr(date_raw, 'isoformat') else str(date_raw)
+                        if not date_str.endswith('Z'):
+                            date_str += 'Z'
+                        expense_data['date'] = date_str
                 except Exception as e:
                     errors.append(f"Date parsing error: {str(e)}")
             
@@ -619,12 +737,57 @@ class CSVExpenseUploader:
             if receipt and receipt != '':
                 expense_data['receipt'] = str(receipt).strip()
             
-            # User email (if provided)
+            # User email/ID resolution - required by Clockify API
             user_email = raw_expense.get('user_email')
             if user_email and user_email != '':
-                expense_data['userEmail'] = str(user_email).strip()
+                user_id = self._resolve_user_email_to_id(workspace_id, user_email.strip())
+                if user_id:
+                    expense_data['userId'] = user_id
+                    expense_data['userEmail'] = str(user_email).strip()
+                else:
+                    errors.append(f"User email not found: {user_email}")
             elif default_user_email:
-                expense_data['userEmail'] = default_user_email
+                user_id = self._resolve_user_email_to_id(workspace_id, default_user_email)
+                if user_id:
+                    expense_data['userId'] = user_id
+                    expense_data['userEmail'] = default_user_email
+                else:
+                    errors.append(f"Default user email not found: {default_user_email}")
+            else:
+                errors.append("User email is required - provide in CSV or as default_user_email parameter")
+            
+            # Set ISO date format if date exists
+            if 'date' in expense_data:
+                # Ensure date is in ISO format required by Clockify API
+                try:
+                    if isinstance(expense_data['date'], str):
+                        # Try to parse and reformat to ensure ISO format
+                        for fmt in ['%Y-%m-%d', '%m/%d/%Y', '%d/%m/%Y', '%Y-%m-%d %H:%M:%S']:
+                            try:
+                                parsed_date = datetime.strptime(expense_data['date'], fmt)
+                                expense_data['date'] = parsed_date.strftime('%Y-%m-%dT%H:%M:%SZ')
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            # If no format worked, try to append time if missing
+                            if 'T' not in expense_data['date']:
+                                expense_data['date'] = expense_data['date'] + 'T00:00:00Z'
+                except Exception as e:
+                    errors.append(f"Date formatting error: {str(e)}")
+            else:
+                # Use current date if not provided
+                expense_data['date'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%SZ')
+            
+            # Ensure required notes field for API
+            if 'description' in expense_data:
+                expense_data['notes'] = expense_data['description']  # API uses 'notes' field
+            
+            # Final validation: Check all API required fields are present
+            api_required_fields = ['amount', 'categoryId', 'date', 'projectId', 'userId']
+            for field in api_required_fields:
+                if field not in expense_data:
+                    errors.append(f"Missing required field for Clockify API: {field}")
             
             return {
                 'valid': len(errors) == 0,
@@ -715,6 +878,25 @@ class CSVExpenseUploader:
             return name_to_id_map.get(category_name_lower)
         except Exception as e:
             self.logger.warning(f"Error resolving category name '{category_name}': {str(e)}")
+            return None
+
+    def _resolve_user_email_to_id(self, workspace_id: str, user_email: str) -> Optional[str]:
+        """
+        Resolve user email to user ID
+        
+        Args:
+            workspace_id: Clockify workspace ID
+            user_email: User email to resolve
+            
+        Returns:
+            User ID if found, None otherwise
+        """
+        try:
+            user_email_lower = user_email.lower().strip()
+            email_to_id_map = self._user_email_to_id.get(workspace_id, {})
+            return email_to_id_map.get(user_email_lower)
+        except Exception as e:
+            self.logger.warning(f"Error resolving user email '{user_email}': {str(e)}")
             return None
 
     def _upload_expenses_in_chunks(self, workspace_id: str, valid_expenses: List[Dict], 

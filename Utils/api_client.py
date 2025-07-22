@@ -36,15 +36,17 @@ class APIClient:
         }
     
     def _make_request(self, endpoint: str, method: str = 'GET', 
-                     data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict:
+                     data: Optional[Dict] = None, params: Optional[Dict] = None,
+                     files: Optional[Dict] = None) -> Dict:
         """
         Make a request to the Clockify API
         
         Args:
             endpoint: API endpoint (without base URL)
             method: HTTP method (GET, POST, PUT, DELETE)
-            data: JSON data for POST/PUT requests
+            data: JSON data for POST/PUT requests or form data for multipart
             params: Query parameters
+            files: Files for multipart upload
             
         Returns:
             dict: API response as dictionary
@@ -54,14 +56,29 @@ class APIClient:
         self.logger.log_api_request(method, endpoint)
         
         try:
+            # Prepare headers for the request
+            request_headers = self.headers.copy()
+            
+            if files:
+                # For multipart/form-data, remove Content-Type header 
+                # to let requests set it automatically with boundary
+                if 'Content-Type' in request_headers:
+                    del request_headers['Content-Type']
+            
             if method == 'GET':
-                response = requests.get(url, headers=self.headers, params=params)
+                response = requests.get(url, headers=request_headers, params=params)
             elif method == 'POST':
-                response = requests.post(url, headers=self.headers, json=data, params=params)
+                if files:
+                    response = requests.post(url, headers=request_headers, data=data, files=files, params=params)
+                else:
+                    response = requests.post(url, headers=request_headers, json=data, params=params)
             elif method == 'PUT':
-                response = requests.put(url, headers=self.headers, json=data, params=params)
+                if files:
+                    response = requests.put(url, headers=request_headers, data=data, files=files, params=params)
+                else:
+                    response = requests.put(url, headers=request_headers, json=data, params=params)
             elif method == 'DELETE':
-                response = requests.delete(url, headers=self.headers, params=params)
+                response = requests.delete(url, headers=request_headers, params=params)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
@@ -159,13 +176,13 @@ class APIClient:
         """Make GET request"""
         return self._make_request(endpoint, 'GET', params=params)
     
-    def post(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict:
+    def post(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None, files: Optional[Dict] = None) -> Dict:
         """Make POST request"""
-        return self._make_request(endpoint, 'POST', data=data, params=params)
+        return self._make_request(endpoint, 'POST', data=data, params=params, files=files)
     
-    def put(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict:
+    def put(self, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None, files: Optional[Dict] = None) -> Dict:
         """Make PUT request"""
-        return self._make_request(endpoint, 'PUT', data=data, params=params)
+        return self._make_request(endpoint, 'PUT', data=data, params=params, files=files)
     
     def delete(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
         """Make DELETE request"""
