@@ -330,48 +330,20 @@ class CSVExpenseUploader:
                 self._project_cache[workspace_id] = {}
                 self._project_name_to_id[workspace_id] = {}
             
-            # Load tasks cache - get all tasks from all projects
+            # Load tasks cache - use lazy loading approach to avoid timeout
             self.logger.info("Loading tasks cache...")
             all_tasks = {}
             task_name_to_data = {}
             
-            for project in self._project_cache.get(workspace_id, {}).values():
-                project_id = project['id']
-                project_name = project['name']
-                
-                try:
-                    tasks_result = self.task_manager.get_tasks_by_project(project_id)
-                    project_tasks = tasks_result.get('items', [])
-                    
-                    for task in project_tasks:
-                        task_id = task.get('id')
-                        task_name = task.get('name', '').lower().strip()
-                        
-                        # Store task data with project context
-                        task_data = {
-                            'id': task_id,
-                            'name': task.get('name', ''),
-                            'project_id': project_id,
-                            'project_name': project_name
-                        }
-                        
-                        all_tasks[task_id] = task_data
-                        
-                        # Create mapping for name resolution
-                        # Use project_name + task_name as key for uniqueness
-                        composite_key = f"{project_name.lower().strip()}::{task_name}"
-                        task_name_to_data[composite_key] = task_data
-                        
-                        # Also store by task name only (may not be unique)
-                        if task_name not in task_name_to_data:
-                            task_name_to_data[task_name] = task_data
-                        
-                except Exception as e:
-                    self.logger.warning(f"Could not load tasks for project {project_id}: {str(e)}")
+            # Get list of projects
+            projects = list(self._project_cache.get(workspace_id, {}).values())
+            total_projects = len(projects)
+            self.logger.info(f"Found {total_projects} projects. Using lazy task loading to prevent timeout...")
             
+            # Initialize empty task caches (will be populated on-demand)
             self._task_cache[workspace_id] = all_tasks
             self._task_name_to_id[workspace_id] = task_name_to_data
-            self.logger.info(f"Cached {len(all_tasks)} tasks from {len(self._project_cache.get(workspace_id, {}))} projects")
+            self.logger.info(f"Initialized task cache for lazy loading from {total_projects} projects")
             
             # Load categories cache
             self.logger.info("Loading categories cache...")
@@ -839,14 +811,14 @@ class CSVExpenseUploader:
             
             task_name_to_data_map = self._task_name_to_id.get(workspace_id, {})
             
-            # First try with project-specific key (most accurate)
+            # First try with project-specific key (most accurate) from existing cache
             composite_key = f"{project_name_lower}::{task_name_lower}"
             task_data = task_name_to_data_map.get(composite_key)
             
             if task_data:
                 return task_data.get('id')
             
-            # Fallback: try task name only (less accurate, may match wrong project)
+            # Fallback: try task name only from existing cache
             task_data = task_name_to_data_map.get(task_name_lower)
             if task_data:
                 # Verify it's in the right project
@@ -854,6 +826,47 @@ class CSVExpenseUploader:
                     return task_data.get('id')
                 else:
                     self.logger.warning(f"Task '{task_name}' found but in different project: {task_data.get('project_name')}")
+            
+            # Lazy loading: if not found in cache, try to load tasks for this specific project
+            project_id = self._resolve_project_name_to_id(workspace_id, project_name)
+            if project_id:
+                self.logger.info(f"Lazy loading tasks for project '{project_name}' to resolve task '{task_name}'")
+                try:
+                    tasks_result = self.task_manager.get_tasks_by_project(project_id)
+                    project_tasks = tasks_result.get('items', [])
+                    
+                    # Add these tasks to the cache
+                    for task in project_tasks:
+                        task_id = task.get('id')
+                        task_name_cached = task.get('name', '').lower().strip()
+                        
+                        # Store task data with project context
+                        task_data = {
+                            'id': task_id,
+                            'name': task.get('name', ''),
+                            'project_id': project_id,
+                            'project_name': project_name
+                        }
+                        
+                        self._task_cache[workspace_id][task_id] = task_data
+                        
+                        # Create mapping for name resolution
+                        composite_key = f"{project_name_lower}::{task_name_cached}"
+                        self._task_name_to_id[workspace_id][composite_key] = task_data
+                        
+                        # Also store by task name only (may not be unique)
+                        if task_name_cached not in self._task_name_to_id[workspace_id]:
+                            self._task_name_to_id[workspace_id][task_name_cached] = task_data
+                    
+                    # Now try to resolve again with the newly cached data
+                    composite_key = f"{project_name_lower}::{task_name_lower}"
+                    task_data = self._task_name_to_id[workspace_id].get(composite_key)
+                    if task_data:
+                        self.logger.info(f"Task '{task_name}' found via lazy loading")
+                        return task_data.get('id')
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to lazy load tasks for project {project_id}: {str(e)}")
             
             return None
             

@@ -86,7 +86,10 @@ clockify/
 ├── UploadExpenses/             # CSV-based expense upload (FULLY FUNCTIONAL)
 │   ├── __init__.py
 │   ├── CSVExpenseUploader.py  # Intelligent CSV parsing and upload
-│   └── Test_final_sheet_expenses.csv # Test data file
+│   ├── test_expense_upload.py # Test script for expense upload validation
+│   ├── validate_csv_format.py # CSV format validation utility
+│   ├── Test_final_sheet_expenses.csv # Reference CSV format file
+│   └── Test_final_sheet_expenses_July_data.csv # July test data
 ├── Tasks/                      # Task management
 │   ├── __init__.py
 │   └── Tasks.py               # Task operations with pagination
@@ -152,6 +155,17 @@ DEBUG=true            # Set to true for detailed logging
 #### **✅ Expense Upload (Production Ready)**
 
 **Note**: Workspace ID can be provided via `--workspace-id` parameter or configured in `.env` as `CLOCKIFY_WORKSPACE_ID`. Parameter takes precedence over environment.
+
+#### **🧪 Testing & Validation Tools**
+
+**CSV Format Validation:**
+```bash
+# Validate CSV format against reference file
+python UploadExpenses/validate_csv_format.py
+
+# Test expense upload functionality
+python UploadExpenses/test_expense_upload.py
+```
 
 ```bash
 # Generate CSV template with sample data
@@ -232,6 +246,9 @@ python main.py upload-expenses --generate-template
 - **Dry Run Capability**: Test uploads without creating actual expenses
 - **Template Generation**: Creates properly formatted CSV templates
 - **Environment Integration**: Seamless .env configuration support
+- **Built-in Testing Tools**: Dedicated validation and testing scripts for quality assurance
+- **Lazy Loading**: Optimized performance with on-demand task resolution
+- **Format Validation**: Compare CSV files against reference formats for consistency
 
 ### **Complete Data Retrieval with Pagination**
 Based on the [Clockify API documentation](https://docs.clockify.me/), all operations support pagination:
