@@ -183,6 +183,9 @@ python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv"
 # Upload with default user email for expenses missing user info
 python main.py upload-expenses --csv-file "expenses.csv" --user-email "user@example.com"
 
+# working example
+python main.py upload-expenses --csv-file "UploadExpenses/Test_final_sheet_expenses_July_data.csv" --user-email "dionysus_tech@bostongene.com"
+
 # Custom chunk size for large files
 python main.py upload-expenses --csv-file "expenses.csv" --chunk-size 25
 ```
