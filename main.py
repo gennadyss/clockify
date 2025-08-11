@@ -33,7 +33,7 @@ from Utils.logging import Logger
 from Config.settings import settings
 
 
-def main_tasks_access(client_id: str = None, client_name: str = None, project_id: str = None, project_name: str = None):
+def main_tasks_access(client_id: str = None, client_name: str = None, project_id: str = None, project_name: str = None, project_names: list = None, project_names_csv: str = None):
     """
     Main execution function for Tasks Access Management
     
@@ -42,12 +42,15 @@ def main_tasks_access(client_id: str = None, client_name: str = None, project_id
         client_name: Client name to filter projects by (alternative to client_id)
         project_id: Specific project ID to process (takes precedence over client filtering)
         project_name: Specific project name to process (alternative to project_id)
+        project_names: List of project names to process (space-separated)
+        project_names_csv: Comma-separated string of project names to process
     """
     print("🕐 Starting Clockify Tasks Access Management")
     print("=" * 50)
     
-    # Priority: project_id > project_name > client_id > client_name > all projects
+    # Priority: project_id > project_name > project_names/project_names_csv > client_id > client_name > all projects
     target_project_id = None
+    target_project_ids = []
     target_client_id = None
     
     if project_id:
@@ -62,6 +65,43 @@ def main_tasks_access(client_id: str = None, client_name: str = None, project_id
             print(f"❌ Project with name '{project_name}' not found!")
             sys.exit(1)
         print(f"✅ Found project ID: {target_project_id}")
+    elif project_names or project_names_csv:
+        # Handle multiple project names
+        names_list = []
+        if project_names_csv:
+            # Parse comma-separated string
+            names_list = [name.strip() for name in project_names_csv.split(',') if name.strip()]
+            print(f"Processing comma-separated project names: {', '.join(names_list)}")
+        elif project_names:
+            # Use space-separated list
+            names_list = project_names
+            print(f"Processing space-separated project names: {', '.join(names_list)}")
+        
+        if names_list:
+            print("🔍 Looking up project IDs from names...")
+            resolved_projects = resolve_multiple_project_names_to_ids(names_list)
+            
+            found_projects = []
+            missing_projects = []
+            
+            for result in resolved_projects:
+                if result['found']:
+                    found_projects.append(result)
+                    target_project_ids.append(result['id'])
+                    print(f"✅ Found project: {result['name']} (ID: {result['id']})")
+                else:
+                    missing_projects.append(result['name'])
+                    print(f"❌ Project not found: {result['name']}")
+            
+            if missing_projects:
+                print(f"\n❌ Could not find {len(missing_projects)} project(s): {', '.join(missing_projects)}")
+                sys.exit(1)
+            
+            if found_projects:
+                print(f"\n✅ Successfully resolved {len(found_projects)} project(s)")
+        else:
+            print("❌ No project names provided!")
+            sys.exit(1)
     elif client_id:
         print(f"Filtering projects by client ID: {client_id}")
         target_client_id = client_id
@@ -87,6 +127,9 @@ def main_tasks_access(client_id: str = None, client_name: str = None, project_id
         success = access_manager.run_access_restrictions()
     elif target_project_id:
         success = access_manager.run_access_restrictions(project_id=target_project_id)
+    elif target_project_ids:
+        # Process multiple projects
+        success = access_manager.run_access_restrictions(project_ids=target_project_ids)
     else:
         success = access_manager.run_access_restrictions()
     
@@ -223,6 +266,51 @@ def main_upload_expenses(workspace_id: str, csv_file: str, dry_run: bool = False
         sys.exit(1)
 
 
+def resolve_multiple_project_names_to_ids(project_names: list) -> list:
+    """
+    Resolve multiple project names to project IDs
+    
+    Args:
+        project_names: List of project names to find
+        
+    Returns:
+        list: List of dicts with project name, id, and found status
+    """
+    try:
+        logger = Logger("project_resolver", console_output=True)
+        project_manager = ProjectManager(logger)
+        
+        # Get all projects
+        all_projects = project_manager.get_all_projects()
+        
+        results = []
+        for project_name in project_names:
+            found = False
+            # Search for project by name (case-insensitive)
+            for project in all_projects.get('items', []):
+                if project.get('name', '').lower() == project_name.lower():
+                    results.append({
+                        'name': project_name,
+                        'id': project.get('id'),
+                        'found': True
+                    })
+                    found = True
+                    break
+            
+            if not found:
+                results.append({
+                    'name': project_name,
+                    'id': None,
+                    'found': False
+                })
+        
+        return results
+        
+    except Exception as e:
+        print(f"❌ Error resolving project names: {e}")
+        return []
+
+
 def resolve_project_name_to_id(project_name: str) -> str:
     """
     Resolve project name to project ID
@@ -325,6 +413,9 @@ Examples:
   # Tasks Access Management
   python main.py tasks-access --client-name "EXT.FFS"
   python main.py tasks-access --project-id "abc123"
+  python main.py tasks-access --project-name "Project Name"
+  python main.py tasks-access --project-names "Project 1" "Project 2" "Project 3"
+  python main.py tasks-access --project-names-csv "Project 1, Project 2, Project 3"
   
   # Expense Upload (workspace-id from .env or parameter)
   python main.py upload-expenses --csv-file "expenses.csv"  # uses CLOCKIFY_WORKSPACE_ID from .env
@@ -354,6 +445,10 @@ Examples:
                              help='Specific project ID to process (takes precedence over client filtering)')
     tasks_parser.add_argument('--project-name', type=str,
                              help='Specific project name to process (alternative to --project-id)')
+    tasks_parser.add_argument('--project-names', type=str, nargs='+',
+                             help='Multiple project names to process (space-separated list)')
+    tasks_parser.add_argument('--project-names-csv', type=str,
+                             help='Multiple project names to process (comma-separated list)')
     
     # Expense Upload subcommand
     expenses_parser = subparsers.add_parser(
@@ -392,7 +487,20 @@ Examples:
             print("❌ Error: Cannot specify both --project-id and --project-name")
             sys.exit(1)
         
-        main_tasks_access(args.client_id, args.client_name, args.project_id, args.project_name)
+        if args.project_names and args.project_names_csv:
+            print("❌ Error: Cannot specify both --project-names and --project-names-csv")
+            sys.exit(1)
+        
+        # Check for conflicting single/multiple project arguments
+        single_project_args = [args.project_id, args.project_name]
+        multiple_project_args = [args.project_names, args.project_names_csv]
+        
+        if any(single_project_args) and any(multiple_project_args):
+            print("❌ Error: Cannot specify both single project (--project-id/--project-name) and multiple projects (--project-names/--project-names-csv)")
+            sys.exit(1)
+        
+        main_tasks_access(args.client_id, args.client_name, args.project_id, args.project_name, 
+                         args.project_names, args.project_names_csv)
         
     elif args.process == 'upload-expenses':
         # Validate arguments for expense upload

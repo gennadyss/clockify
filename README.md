@@ -204,6 +204,12 @@ python main.py tasks-access --client-name "Client Name"
 # Process specific project
 python main.py tasks-access --project-id "abc123"
 python main.py tasks-access --project-name "Project Name"
+
+# Process multiple projects (space-separated)
+python main.py tasks-access --project-names "Project 1" "Project 2" "Project 3"
+
+# Process multiple projects (comma-separated)
+python main.py tasks-access --project-names-csv "Project 1, Project 2, Project 3"
 ```
 
 #### **Module Demonstrations**

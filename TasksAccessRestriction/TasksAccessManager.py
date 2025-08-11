@@ -694,6 +694,73 @@ class TasksAccessManager:
         self.logger.log_step("STEP 2: Removing Access from Restricted Tasks", "COMPLETE")
         return True
     
+    def step_one_grant_access_multiple(self, project_ids: list, role: str = "Admin") -> bool:
+        """
+        Step 1 for multiple projects: Grant access to authorized tasks by updating userGroupIds and assigneeIds
+        
+        Args:
+            project_ids: List of specific project IDs to process
+            role: User role to include in authorized users (default: "Admin")
+        """
+        self.logger.log_step("STEP 1: Granting Access to Authorized Tasks (Multiple Projects)", "START")
+        
+        overall_success = True
+        total_projects_processed = 0
+        total_tasks_updated = 0
+        
+        for project_id in project_ids:
+            self.logger.info(f"Processing project ID: {project_id}")
+            
+            # Use existing single project logic for each project
+            success = self.step_one_grant_access(project_id, role)
+            if success:
+                total_projects_processed += 1
+                # Add to total task count if available
+                if hasattr(self, 'authorized_tasks_count'):
+                    total_tasks_updated += self.authorized_tasks_count
+            else:
+                overall_success = False
+                self.logger.warning(f"⚠️  Failed to process project ID: {project_id}")
+        
+        self.logger.info(f"✅ Processed {total_projects_processed}/{len(project_ids)} projects successfully")
+        self.logger.info(f"📊 Total authorized tasks processed: {total_tasks_updated}")
+        
+        self.logger.log_step("STEP 1: Granting Access to Authorized Tasks (Multiple Projects)", "COMPLETE")
+        return overall_success
+    
+    def step_two_remove_access_multiple(self, project_ids: list) -> bool:
+        """
+        Step 2 for multiple projects: Remove access to specific tasks from restricted groups
+        
+        Args:
+            project_ids: List of specific project IDs to process
+        """
+        self.logger.log_step("STEP 2: Removing Access from Restricted Tasks (Multiple Projects)", "START")
+        
+        overall_success = True
+        total_projects_processed = 0
+        total_tasks_updated = 0
+        
+        for project_id in project_ids:
+            self.logger.info(f"Processing project ID: {project_id}")
+            
+            # Use existing single project logic for each project
+            success = self.step_two_remove_access(project_id)
+            if success:
+                total_projects_processed += 1
+                # Add to total task count if available
+                if hasattr(self, 'restricted_tasks_count'):
+                    total_tasks_updated += self.restricted_tasks_count
+            else:
+                overall_success = False
+                self.logger.warning(f"⚠️  Failed to process project ID: {project_id}")
+        
+        self.logger.info(f"✅ Processed {total_projects_processed}/{len(project_ids)} projects successfully")
+        self.logger.info(f"📊 Total restricted tasks processed: {total_tasks_updated}")
+        
+        self.logger.log_step("STEP 2: Removing Access from Restricted Tasks (Multiple Projects)", "COMPLETE")
+        return overall_success
+    
     def create_united_task_files(self, project_id: str = None) -> bool:
         """
         Create united files that merge authorized and restricted tasks data
@@ -985,12 +1052,13 @@ class TasksAccessManager:
             self.logger.error(f"Error validating user group access: {e}")
             return {"user_id": user_id, "error": str(e), "access_status": "ERROR"}
     
-    def run_access_restrictions(self, project_id: str = None, role: str = "Admin") -> bool:
+    def run_access_restrictions(self, project_id: str = None, project_ids: list = None, role: str = "Admin") -> bool:
         """
         Execute both access restriction steps
         
         Args:
             project_id: Specific project ID to process (if None, uses all relevant projects)
+            project_ids: List of specific project IDs to process (alternative to project_id)
             role: User role to include in authorized users (default: "Admin")
         """
         self.logger.info("🕐 Starting Clockify Access Management")
@@ -998,6 +1066,8 @@ class TasksAccessManager:
         
         if project_id:
             self.logger.info(f"Processing specific project ID: {project_id}")
+        elif project_ids:
+            self.logger.info(f"Processing specific project IDs: {', '.join(project_ids)}")
         else:
             self.logger.info("Processing all relevant projects (using project identification methods)")
         
@@ -1018,15 +1088,30 @@ class TasksAccessManager:
         
         try:
             # Execute Step 1
-            success_step1 = self.step_one_grant_access(project_id, role)
+            if project_ids:
+                # Process multiple projects
+                success_step1 = self.step_one_grant_access_multiple(project_ids, role)
+            else:
+                # Process single project or all projects
+                success_step1 = self.step_one_grant_access(project_id, role)
             
             # Execute Step 2
-            success_step2 = self.step_two_remove_access(project_id)
+            if project_ids:
+                # Process multiple projects
+                success_step2 = self.step_two_remove_access_multiple(project_ids)
+            else:
+                # Process single project or all projects
+                success_step2 = self.step_two_remove_access(project_id)
             
             # Create united files if both steps completed
             success_united = False
             if success_step1 and success_step2:
-                success_united = self.create_united_task_files(project_id)
+                if project_ids:
+                    # For multiple projects, create a united file with all project IDs
+                    project_context = f"multiple_projects_{len(project_ids)}"
+                    success_united = self.create_united_task_files(project_context)
+                else:
+                    success_united = self.create_united_task_files(project_id)
                 self.logger.info("✅ Both steps completed successfully!")
                 if success_united:
                     self.logger.info("✅ United task files created successfully!")
