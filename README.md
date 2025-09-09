@@ -161,7 +161,13 @@ DEBUG=true            # Set to true for detailed logging
 **CSV Format Validation:**
 ```bash
 # Validate CSV format against reference file
-python UploadExpenses/validate_csv_format.py
+python UploadExpenses/validate_csv_format.py <name_of_expenses.csv>
+
+# Validate with custom reference file
+python UploadExpenses/validate_csv_format.py <name_of_expenses.csv> --reference <reference_file.csv>
+
+# Example validation
+python UploadExpenses/validate_csv_format.py Test_final_sheet_expenses_July_data.csv
 
 # Test expense upload functionality
 python UploadExpenses/test_expense_upload.py
@@ -184,7 +190,7 @@ python main.py upload-expenses --workspace-id "xyz789" --csv-file "expenses.csv"
 python main.py upload-expenses --csv-file "expenses.csv" --user-email "user@example.com"
 
 # working example
-python main.py upload-expenses --csv-file "UploadExpenses/Test_final_sheet_expenses_July_data.csv" --user-email "dionysus_tech@bostongene.com"
+python main.py upload-expenses --csv-file "UploadExpenses/Test_final_sheet_expenses_Aug_25.csv" --user-email "dionysus_tech@bostongene.com"
 
 # Custom chunk size for large files
 python main.py upload-expenses --csv-file "expenses.csv" --chunk-size 25
@@ -245,6 +251,26 @@ Use `--generate-template` to create a properly formatted CSV with sample data:
 python main.py upload-expenses --generate-template
 ```
 
+### **CSV Validation Tool Features**
+The `validate_csv_format.py` script provides comprehensive validation:
+
+**Usage:**
+```bash
+# Basic validation against default reference
+python UploadExpenses/validate_csv_format.py your_expenses.csv
+
+# Custom reference file
+python UploadExpenses/validate_csv_format.py your_expenses.csv --reference custom_reference.csv
+```
+
+**Validation Features:**
+- **Structure Validation**: Checks required columns, data types, and format consistency
+- **Content Validation**: Validates dates, amounts, project/task names, and billable values
+- **Reference Comparison**: Compares against reference CSV for format consistency
+- **Data Summary**: Provides statistics on amounts, projects, categories, and date ranges
+- **Detailed Reporting**: Row-by-row error analysis with specific issue identification
+- **Multiple Date Formats**: Supports MM/DD/YYYY, DD/MM/YYYY, YYYY-MM-DD patterns
+
 ## 🔧 Enhanced Features
 
 ### **✅ Production-Ready Expense Upload**
@@ -257,7 +283,8 @@ python main.py upload-expenses --generate-template
 - **Environment Integration**: Seamless .env configuration support
 - **Built-in Testing Tools**: Dedicated validation and testing scripts for quality assurance
 - **Lazy Loading**: Optimized performance with on-demand task resolution
-- **Format Validation**: Compare CSV files against reference formats for consistency
+- **Format Validation**: Command-line CSV validation tool with flexible file input and reference comparison
+- **Parameterized Validation**: Accept any CSV file name as input parameter for flexible testing
 
 ### **Complete Data Retrieval with Pagination**
 Based on the [Clockify API documentation](https://docs.clockify.me/), all operations support pagination:

@@ -435,27 +435,38 @@ class CSVFormatValidator:
 
 def main():
     """Main function to run CSV validation"""
+    import argparse
+    
+    # Set up command line argument parsing
+    parser = argparse.ArgumentParser(description='Validate CSV file format for Clockify expense upload')
+    parser.add_argument('name_of_expenses', 
+                       help='Name of the CSV file to validate (e.g., Test_final_sheet_expenses_July_data.csv)')
+    parser.add_argument('--reference', 
+                       default='Test_final_sheet_expenses.csv',
+                       help='Reference CSV file for comparison (default: Test_final_sheet_expenses.csv)')
+    
+    args = parser.parse_args()
     
     # File paths - now relative to current directory since we're in UploadExpenses/
-    july_csv = "Test_final_sheet_expenses_July_data.csv"
-    reference_csv = "Test_final_sheet_expenses.csv"
+    expenses_csv = args.name_of_expenses
+    reference_csv = args.reference
     
     # Initialize validator
     logger = Logger("CSVValidator", console_output=True)
     validator = CSVFormatValidator(logger=logger)
     
-    # Validate the July CSV file
-    print("Validating July expenses CSV file...")
-    validation_results = validator.validate_csv_file(july_csv, reference_csv)
+    # Validate the expenses CSV file
+    print(f"Validating expenses CSV file: {expenses_csv}")
+    validation_results = validator.validate_csv_file(expenses_csv, reference_csv)
     
     # Print detailed report
     validator.print_validation_report(validation_results)
     
     # Summary
     if validation_results.get('valid'):
-        print("\n✅ The July CSV file is VALID and ready for upload!")
+        print(f"\n✅ The CSV file '{expenses_csv}' is VALID and ready for upload!")
     else:
-        print("\n❌ The July CSV file has issues that need to be fixed before upload.")
+        print(f"\n❌ The CSV file '{expenses_csv}' has issues that need to be fixed before upload.")
         print("\nRecommendations:")
         print("1. Fix all issues listed above")
         print("2. Ensure date format consistency")

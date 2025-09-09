@@ -215,3 +215,5 @@ __marimo__/
 
 # Export intermediate data
 /Export/*
+
+.vscode/

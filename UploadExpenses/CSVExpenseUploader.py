@@ -222,6 +222,30 @@ class CSVExpenseUploader:
             
             self.logger.info(f"Validation completed: {len(valid_expenses)} valid, {len(validation_errors)} errors")
             
+            # Log detailed validation error information
+            if validation_errors:
+                self.logger.warning(f"Found {len(validation_errors)} invalid records:")
+                for error_record in validation_errors:
+                    row_num = error_record.get('row_index', 'unknown')
+                    errors = error_record.get('errors', [])
+                    raw_data = error_record.get('raw_data', {})
+                    project = raw_data.get('project_name', 'N/A')
+                    task = raw_data.get('task_name', 'N/A')
+                    amount = raw_data.get('amount', 'N/A')
+                    
+                    self.logger.error(f"Row {row_num}: Project='{project}', Task='{task}', Amount='{amount}' - Errors: {'; '.join(errors)}")
+                
+                # Also log a summary by error type
+                error_types = {}
+                for error_record in validation_errors:
+                    for error in error_record.get('errors', []):
+                        error_type = error.split(':')[0] if ':' in error else error
+                        error_types[error_type] = error_types.get(error_type, 0) + 1
+                
+                self.logger.warning(f"Error summary: {dict(error_types)}")
+            else:
+                self.logger.info("✅ All records passed validation successfully")
+            
             # Step 5: If dry run, return validation results
             if dry_run:
                 return {
@@ -513,6 +537,7 @@ class CSVExpenseUploader:
                         })
                         
                 except Exception as e:
+                    self.logger.error(f"Validation exception for row {i + 1}: {str(e)} - Data: {raw_expense}")
                     validation_errors.append({
                         'row_index': i + 1,
                         'raw_data': raw_expense,
@@ -601,28 +626,49 @@ class CSVExpenseUploader:
                 project_id = self._resolve_project_name_to_id(workspace_id, project_name.strip())
                 if project_id:
                     expense_data['projectId'] = project_id
+                    self.logger.debug(f"Row {row_index + 1}: Project '{project_name}' resolved to ID: {project_id}")
                 else:
-                    errors.append(f"Project name not found: {project_name}")
+                    error_msg = f"Project name not found: '{project_name}'"
+                    errors.append(error_msg)
+                    self.logger.warning(f"Row {row_index + 1}: {error_msg}")
+                    # Log available projects for debugging
+                    available_projects = list(self._project_name_to_id.get(workspace_id, {}).keys())[:5]
+                    self.logger.debug(f"Available projects (first 5): {available_projects}")
             else:
-                errors.append("Project name is required - must match a Clockify project name")
+                error_msg = "Project name is required - must match a Clockify project name"
+                errors.append(error_msg)
+                self.logger.warning(f"Row {row_index + 1}: {error_msg}")
             
             # Task name resolution
             if task_name and task_name.strip() and project_name and project_name.strip():
                 task_id = self._resolve_task_name_to_id(workspace_id, task_name.strip(), project_name.strip())
                 if task_id:
                     expense_data['taskId'] = task_id
+                    self.logger.debug(f"Row {row_index + 1}: Task '{task_name}' in project '{project_name}' resolved to ID: {task_id}")
                 else:
-                    errors.append(f"Task name '{task_name}' not found in project '{project_name}'")
+                    error_msg = f"Task name '{task_name}' not found in project '{project_name}'"
+                    errors.append(error_msg)
+                    self.logger.warning(f"Row {row_index + 1}: {error_msg}")
+                    # Log suggestion for task name resolution
+                    self.logger.debug(f"Row {row_index + 1}: Consider checking if task name is spelled correctly or exists in the specified project")
             
             # Category name resolution - REQUIRED by Clockify API
             if category_name and category_name.strip():
                 category_id = self._resolve_category_name_to_id(workspace_id, category_name.strip())
                 if category_id:
                     expense_data['categoryId'] = category_id
+                    self.logger.debug(f"Row {row_index + 1}: Category '{category_name}' resolved to ID: {category_id}")
                 else:
-                    errors.append(f"Category name not found in Clockify categories: {category_name}")
+                    error_msg = f"Category name not found in Clockify categories: '{category_name}'"
+                    errors.append(error_msg)
+                    self.logger.warning(f"Row {row_index + 1}: {error_msg}")
+                    # Log available categories for debugging
+                    available_categories = list(self._category_name_to_id.get(workspace_id, {}).keys())
+                    self.logger.debug(f"Available categories: {available_categories}")
             else:
-                errors.append("Category name is required - must match a Clockify expense category")
+                error_msg = "Category name is required - must match a Clockify expense category"
+                errors.append(error_msg)
+                self.logger.warning(f"Row {row_index + 1}: {error_msg}")
             
             # Optional field validation and transformation
             
@@ -716,17 +762,25 @@ class CSVExpenseUploader:
                 if user_id:
                     expense_data['userId'] = user_id
                     expense_data['userEmail'] = str(user_email).strip()
+                    self.logger.debug(f"Row {row_index + 1}: User email '{user_email}' resolved to ID: {user_id}")
                 else:
-                    errors.append(f"User email not found: {user_email}")
+                    error_msg = f"User email not found: '{user_email}'"
+                    errors.append(error_msg)
+                    self.logger.warning(f"Row {row_index + 1}: {error_msg}")
             elif default_user_email:
                 user_id = self._resolve_user_email_to_id(workspace_id, default_user_email)
                 if user_id:
                     expense_data['userId'] = user_id
                     expense_data['userEmail'] = default_user_email
+                    self.logger.debug(f"Row {row_index + 1}: Default user email '{default_user_email}' resolved to ID: {user_id}")
                 else:
-                    errors.append(f"Default user email not found: {default_user_email}")
+                    error_msg = f"Default user email not found: '{default_user_email}'"
+                    errors.append(error_msg)
+                    self.logger.error(f"Row {row_index + 1}: {error_msg}")
             else:
-                errors.append("User email is required - provide in CSV or as default_user_email parameter")
+                error_msg = "User email is required - provide in CSV or as default_user_email parameter"
+                errors.append(error_msg)
+                self.logger.warning(f"Row {row_index + 1}: {error_msg}")
             
             # Set ISO date format if date exists
             if 'date' in expense_data:
@@ -862,8 +916,14 @@ class CSVExpenseUploader:
                     composite_key = f"{project_name_lower}::{task_name_lower}"
                     task_data = self._task_name_to_id[workspace_id].get(composite_key)
                     if task_data:
-                        self.logger.info(f"Task '{task_name}' found via lazy loading")
+                        self.logger.info(f"Task '{task_name}' found via lazy loading in project '{project_name}'")
                         return task_data.get('id')
+                    else:
+                        self.logger.warning(f"Task '{task_name}' not found even after lazy loading project '{project_name}' tasks")
+                        # Log available tasks in this project
+                        project_tasks = [key.split('::')[1] for key in self._task_name_to_id[workspace_id].keys() 
+                                       if key.startswith(f"{project_name_lower}::")][:5]
+                        self.logger.debug(f"Available tasks in project '{project_name}' (first 5): {project_tasks}")
                     
                 except Exception as e:
                     self.logger.warning(f"Failed to lazy load tasks for project {project_id}: {str(e)}")
@@ -953,7 +1013,19 @@ class CSVExpenseUploader:
                     total_failed += chunk_failed
                     
                     all_created_expenses.extend(chunk_result.get('created_expenses', []))
-                    all_failed_expenses.extend(chunk_result.get('failed_expenses', []))
+                    
+                    failed_expenses = chunk_result.get('failed_expenses', [])
+                    all_failed_expenses.extend(failed_expenses)
+                    
+                    # Log details of failed expenses
+                    if failed_expenses:
+                        self.logger.warning(f"Chunk {chunk_number}: {len(failed_expenses)} expenses failed:")
+                        for failed_expense in failed_expenses[:3]:  # Log first 3 failures
+                            expense_desc = failed_expense.get('expense_data', {}).get('description', 'N/A')
+                            error_msg = failed_expense.get('error', 'Unknown error')
+                            self.logger.error(f"  Failed expense '{expense_desc}': {error_msg}")
+                        if len(failed_expenses) > 3:
+                            self.logger.warning(f"  ... and {len(failed_expenses) - 3} more failures")
                     
                     chunk_results.append({
                         'chunk_number': chunk_number,
