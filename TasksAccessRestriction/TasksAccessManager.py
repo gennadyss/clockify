@@ -52,25 +52,93 @@ class TasksAccessManager:
         self.client_filter_id = None
         
         # Define the authorized tasks within EXT.FFS projects from README
+        
+        # V1 Start
+        # self.authorized_tasks = [
+        #     "NGS Reagents and Lab Operations Cost",
+        #     "ISP Reagents and Lab Operations Cost", 
+        #     "IMG Reagents and Lab Operations Cost",
+        #     "RepGen Dry operations",
+        #     "Pipeline Dry Operations",
+        #     "Contingencies"
+        # ]
+        
+        # self.restricted_tasks = [
+        #     "NGS Dry Operations",
+        #     "ISP Dry Operations", 
+        #     "IMG Dry Operations",
+        #     "PM Dry Operations",
+        #     "RepGen Dry operations",
+        #     "Pipeline Dry Operations"
+        # ]
+        
+        # # Authorized users
+        # self.authorized_users = [
+        #     "Ekaterina Postovalova",
+        #     "Lev Bedniagin", 
+        #     "Alina Mulyukina",
+        #     "Anastasiya Terenteva",
+        #     "Tatiana Vasilyeva",
+        #     "Anastasiya Tarabarova",
+        #     "Lile Kontselidze",
+        #     "Alexandra Boiko"
+        #     #added from Admin Role
+        #     "Anastasia Shvyrkova",
+        #     "Anastasiya Makarova",
+        #     "Dionysus Tech",
+        #     "Gennady Sidelnikov",
+        #     "Grace Goyette",
+        #     "Lyudmila Kolomys",
+        #     "Melanie Sinclair",
+        #     "Melissa Olsson",
+        #     "Vladimir Saturchenko"
+        # ]
+        
+        # self.authorized_groups = [
+        #     "RPMHS.RPMG: Research Projects Management Group"
+        # ]
+        
+        # self.restricted_groups = [
+        #     "US.LAB.RND",
+        #     "US.LAB.CLIN",
+        #     "US.QAREG",
+        #     "US.HR",
+        #     "US.LAB.RND.NGS",
+        #     "US.LAB.RND.ISP",
+        #     "US.LAB.RND.PATH",
+        #     "US.LAB.CLIN.NGS",
+        #     "US.LAB.CLIN.PATH",
+        #     "US.LAB.RND.OP.BSP"
+        # ]
+
+        #  # Restricted users
+        # self.restricted_users = [
+        #     "Eric White",
+        #     "Artur Baisangurov",
+        #     "Tina Barsoumian"
+        # ]
+        # V1 End
+
+        # V2 Start
         self.authorized_tasks = [
             "NGS Reagents and Lab Operations Cost",
-            "ISP Reagents and Lab Operations Cost", 
-            "IMG Reagents and Lab Operations Cost",
-            "RepGen Dry operations",
-            "Pipeline Dry Operations",
-            "Contingencies"
+            "ISP Reagents and Lab Operations Cost",
+            "IMG Reagents and Lab Operations Cost"
+
         ]
-        
-        self.restricted_tasks = [
-            "NGS Dry Operations",
-            "ISP Dry Operations", 
-            "IMG Dry Operations",
-            "PM Dry Operations",
-            "RepGen Dry operations",
-            "Pipeline Dry Operations"
+
+        self.authorized_groups = [
+            "US.LAB.RND",
+            "US.LAB.CLIN",
+            "US.LAB.RND.NGS",
+            "US.LAB.RND.ISP",
+            "US.LAB.RND.PATH",
+            "US.LAB.CLIN.NGS",
+            "US.LAB.CLIN.PATH",
+            "US.LAB.RND.OP.BSP"
         ]
-        
-        # Authorized users
+
+        # # Authorized users
         self.authorized_users = [
             "Ekaterina Postovalova",
             "Lev Bedniagin", 
@@ -79,8 +147,7 @@ class TasksAccessManager:
             "Tatiana Vasilyeva",
             "Anastasiya Tarabarova",
             "Lile Kontselidze",
-            "Alexandra Boiko"
-            #added from Admin Role
+            "Alexandra Boiko",
             "Anastasia Shvyrkova",
             "Anastasiya Makarova",
             "Dionysus Tech",
@@ -91,30 +158,11 @@ class TasksAccessManager:
             "Melissa Olsson",
             "Vladimir Saturchenko"
         ]
-        
-        self.authorized_groups = [
-            "RPMHS.RPMG: Research Projects Management Group"
-        ]
-        
-        self.restricted_groups = [
-            "US.LAB.RND",
-            "US.LAB.CLIN",
-            "US.QAREG",
-            "US.HR",
-            "US.LAB.RND.NGS",
-            "US.LAB.RND.ISP",
-            "US.LAB.RND.PATH",
-            "US.LAB.CLIN.NGS",
-            "US.LAB.CLIN.PATH",
-            "US.LAB.RND.OP.BSP"
-        ]
 
-         # Restricted users
-        self.restricted_users = [
-            "Eric White",
-            "Artur Baisangurov",
-            "Tina Barsoumian"
-        ]
+        self.restricted_tasks = []   # Empty list - V2 doesn't use Step 2
+        self.restricted_groups = []  # Empty list - V2 doesn't use Step 2
+        self.restricted_users = []   # Empty list - not used in V2
+        # V2 End
 
         # Initialize data storage for united files
         self.authorized_tasks_data = {}
@@ -426,6 +474,16 @@ class TasksAccessManager:
         total_authorized_tasks = 0
         total_tasks_updated = 0
         
+        # Create mappings for user IDs to names
+        user_id_to_name = {}
+        for user in all_users.get('items', []):
+            user_id_to_name[user.get('id', '')] = user.get('name', '')
+        
+        # Create mappings for group IDs to names
+        group_id_to_name = {}
+        for group in authorized_groups_details.get('items', []):
+            group_id_to_name[group.get('id', '')] = group.get('name', '')
+        
         for authorized_task_pattern in self.authorized_tasks:
             matching_tasks = {"items": []}
             
@@ -448,6 +506,26 @@ class TasksAccessManager:
                         task_copy['project_name'] = project_name
                         task_copy['project_id'] = project_id
                         task_copy['matched_authorized_task'] = authorized_task_pattern
+                        
+                        # Add human-readable names for existing IDs
+                        # Add assignee names from assigneeIds
+                        if 'assigneeIds' in task_copy and task_copy['assigneeIds']:
+                            task_copy['assigneeNames'] = [
+                                user_id_to_name.get(uid, f"Unknown User ({uid})") 
+                                for uid in task_copy['assigneeIds']
+                            ]
+                        else:
+                            task_copy['assigneeNames'] = []
+                        
+                        # Add user group names from userGroupIds
+                        if 'userGroupIds' in task_copy and task_copy['userGroupIds']:
+                            task_copy['userGroupNames'] = [
+                                group_id_to_name.get(gid, f"Unknown Group ({gid})") 
+                                for gid in task_copy['userGroupIds']
+                            ]
+                        else:
+                            task_copy['userGroupNames'] = []
+                        
                         matching_tasks['items'].append(task_copy)
                         total_authorized_tasks += 1
             
@@ -477,6 +555,8 @@ class TasksAccessManager:
             "authorized_groups": authorized_groups_details.get('items', []),
             "authorized_user_ids": authorized_user_ids,
             "authorized_group_ids": authorized_group_ids,
+            "authorized_user_names": [user_id_to_name.get(uid, f"Unknown ({uid})") for uid in authorized_user_ids],
+            "authorized_group_names": [group_id_to_name.get(gid, f"Unknown ({gid})") for gid in authorized_group_ids],
             "summary": {
                 "total_authorized_users": len(authorized_user_ids),
                 "total_authorized_groups": len(authorized_group_ids),
@@ -570,6 +650,11 @@ class TasksAccessManager:
         all_groups = self.group_manager.get_all_groups()
         all_group_ids = [group.get('id') for group in all_groups.get('items', []) if group.get('id')]
         
+        # Create mapping for group IDs to names
+        group_id_to_name = {}
+        for group in all_groups.get('items', []):
+            group_id_to_name[group.get('id', '')] = group.get('name', '')
+        
         self.logger.info(f"Found {len(all_group_ids)} total groups in Clockify")
         
         # Step 2: Remove restricted groups from the list
@@ -607,6 +692,25 @@ class TasksAccessManager:
                         task_copy['project_name'] = project_name
                         task_copy['project_id'] = project_id
                         task_copy['matched_restricted_task'] = task_name
+                        
+                        # Add human-readable names for existing IDs
+                        # Add user group names from userGroupIds
+                        if 'userGroupIds' in task_copy and task_copy['userGroupIds']:
+                            task_copy['userGroupNames'] = [
+                                group_id_to_name.get(gid, f"Unknown Group ({gid})") 
+                                for gid in task_copy['userGroupIds']
+                            ]
+                        else:
+                            task_copy['userGroupNames'] = []
+                        
+                        # Add assignee names from assigneeIds (if applicable)
+                        if 'assigneeIds' in task_copy and task_copy['assigneeIds']:
+                            # Note: We don't have user mapping in Step 2 by default
+                            # This will show IDs, but structure is consistent
+                            task_copy['assigneeNames'] = []
+                        else:
+                            task_copy['assigneeNames'] = []
+                        
                         matching_tasks['items'].append(task_copy)
                         total_restricted_tasks += 1
             
@@ -636,6 +740,8 @@ class TasksAccessManager:
             "restricted_groups": restricted_groups_details.get('items', []),
             "allowed_group_ids": allowed_group_ids,
             "restricted_group_ids": restricted_group_ids,
+            "allowed_group_names": [group_id_to_name.get(gid, f"Unknown ({gid})") for gid in allowed_group_ids],
+            "restricted_group_names": [group_id_to_name.get(gid, f"Unknown ({gid})") for gid in restricted_group_ids],
             "summary": {
                 "total_groups": len(all_group_ids),
                 "restricted_groups": len(restricted_group_ids),
